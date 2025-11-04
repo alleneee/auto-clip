@@ -1,0 +1,42 @@
+# Web框架
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# 异步任务
+celery==5.3.4
+redis==5.0.1
+flower==2.0.1
+
+# 视频处理
+moviepy==1.0.3
+ffmpeg-python==0.2.0
+
+# AI服务 - 阿里云DashScope
+dashscope==1.14.1
+alibabacloud-tea-openapi==0.3.9
+alibabacloud-nls-cloud-meta20220816==1.0.0
+
+# 存储
+oss2==2.18.4
+
+# 数据验证
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# HTTP客户端
+httpx==0.25.2
+aiofiles==23.2.1
+
+# 日志和监控
+structlog==23.2.0
+prometheus-client==0.19.0
+
+# 工具库
+python-dotenv==1.0.0
+typing-extensions==4.9.0
+
+# 开发工具
+pytest==7.4.3
+pytest-asyncio==0.21.1
+black==23.12.1

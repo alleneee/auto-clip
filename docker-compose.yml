@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # Redis服务
+  redis:
+    image: redis:7-alpine
+    container_name: auto-clip-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - auto-clip-network
+
+  # FastAPI应用
+  api:
+    build: .
+    container_name: auto-clip-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    networks:
+      - auto-clip-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker - 视频分析
+  worker-analyzer:
+    build: .
+    container_name: auto-clip-worker-analyzer
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - C_FORCE_ROOT=true
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    networks:
+      - auto-clip-network
+    command: celery -A app.workers.celery_app worker -Q analysis -l info -c 4
+
+  # Celery Worker - 视频剪辑
+  worker-clipper:
+    build: .
+    container_name: auto-clip-worker-clipper
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - C_FORCE_ROOT=true
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    networks:
+      - auto-clip-network
+    command: celery -A app.workers.celery_app worker -Q clipping -l info -c 2
+
+  # Celery Flower - 任务监控
+  flower:
+    build: .
+    container_name: auto-clip-flower
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    networks:
+      - auto-clip-network
+    command: celery -A app.workers.celery_app flower --port=5555
+
+volumes:
+  redis-data:
+
+networks:
+  auto-clip-network:
+    driver: bridge
