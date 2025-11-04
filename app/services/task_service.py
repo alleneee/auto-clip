@@ -2,27 +2,28 @@
 任务服务层 - 封装任务相关的业务逻辑
 """
 import uuid
-from typing import Optional, List, Dict, Any
-from datetime import datetime
+from typing import Optional, Dict, Any
 
 from app.models.task import Task, TaskStatus, TaskCreateRequest
 from app.core.exceptions import TaskNotFoundError
 from app.utils.logger import get_logger
+from app.utils.redis_client import redis_client
 
 logger = get_logger(__name__)
 
 
 class TaskService:
-    """任务业务逻辑服务"""
+    """任务业务逻辑服务（使用Redis存储）"""
 
     def __init__(self):
         """
         初始化服务
 
-        注意：生产环境应使用Redis存储
+        使用Redis作为任务存储后端
         """
-        # 简单的内存存储（生产环境应使用Redis）
-        self.task_storage: Dict[str, Task] = {}
+        self.redis = redis_client
+        # 任务默认TTL（7天）
+        self.task_ttl = 7 * 24 * 3600
 
     def generate_task_id(self) -> str:
         """
@@ -33,7 +34,7 @@ class TaskService:
         """
         return f"task_{uuid.uuid4().hex[:12]}"
 
-    def create_task(self, request: TaskCreateRequest) -> Task:
+    async def create_task(self, request: TaskCreateRequest) -> Task:
         """
         创建新任务
 
@@ -57,8 +58,12 @@ class TaskService:
             },
         )
 
-        # 存储任务
-        self.task_storage[task_id] = task
+        # 存储任务到Redis
+        await self.redis.set_task(
+            task_id=task_id,
+            task_data=task.model_dump(),
+            ttl=self.task_ttl
+        )
 
         logger.info(
             "task_created",
@@ -67,13 +72,43 @@ class TaskService:
             webhook_url=request.webhook_url,
         )
 
-        # TODO: 触发Celery异步处理
-        # from app.workers.video_tasks import process_video_pipeline
-        # process_video_pipeline.delay(task_id, request.video_ids, request.config)
+        # 触发Celery异步处理
+        try:
+            from app.workers.batch_processing_tasks import process_video_pipeline_task
+
+            # 异步提交任务到Celery
+            celery_result = process_video_pipeline_task.delay(
+                task_id=task_id,
+                video_ids=request.video_ids,
+                config=request.config or {}
+            )
+
+            # 记录Celery任务ID并更新到Redis
+            task.celery_task_id = celery_result.id
+            await self.redis.set_task(
+                task_id=task_id,
+                task_data=task.model_dump(),
+                ttl=self.task_ttl
+            )
+
+            logger.info(
+                "celery_task_submitted",
+                task_id=task_id,
+                celery_task_id=celery_result.id
+            )
+
+        except Exception as e:
+            logger.error(
+                "celery_task_submit_failed",
+                task_id=task_id,
+                error=str(e)
+            )
+            # 即使Celery提交失败，也返回任务对象
+            # 任务状态会保持为PENDING
 
         return task
 
-    def get_task(self, task_id: str) -> Task:
+    async def get_task(self, task_id: str) -> Task:
         """
         获取任务对象
 
@@ -86,14 +121,17 @@ class TaskService:
         Raises:
             TaskNotFoundError: 任务不存在
         """
-        task = self.task_storage.get(task_id)
+        task_data = await self.redis.get_task(task_id)
 
-        if not task:
+        if not task_data:
             raise TaskNotFoundError(f"任务不存在: {task_id}")
+
+        # 从字典创建Task对象
+        task = Task(**task_data)
 
         return task
 
-    def get_task_status(self, task_id: str) -> Dict[str, Any]:
+    async def get_task_status(self, task_id: str) -> Dict[str, Any]:
         """
         获取任务状态信息
 
@@ -106,7 +144,7 @@ class TaskService:
         Raises:
             TaskNotFoundError: 任务不存在
         """
-        task = self.get_task(task_id)
+        task = await self.get_task(task_id)
 
         return {
             "task_id": task.task_id,
@@ -117,7 +155,7 @@ class TaskService:
             "created_at": task.created_at.isoformat(),
         }
 
-    def get_task_result(self, task_id: str) -> Dict[str, Any]:
+    async def get_task_result(self, task_id: str) -> Dict[str, Any]:
         """
         获取任务结果
 
@@ -130,7 +168,7 @@ class TaskService:
         Raises:
             TaskNotFoundError: 任务不存在
         """
-        task = self.get_task(task_id)
+        task = await self.get_task(task_id)
 
         if task.status != TaskStatus.COMPLETED:
             return {
@@ -153,7 +191,7 @@ class TaskService:
             "metadata": task.metadata,
         }
 
-    def cancel_task(self, task_id: str) -> Dict[str, Any]:
+    async def cancel_task(self, task_id: str) -> Dict[str, Any]:
         """
         取消任务
 
@@ -166,7 +204,7 @@ class TaskService:
         Raises:
             TaskNotFoundError: 任务不存在
         """
-        task = self.get_task(task_id)
+        task = await self.get_task(task_id)
 
         if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
             return {
@@ -174,23 +212,53 @@ class TaskService:
                 "message": "任务已完成或失败，无法取消",
             }
 
-        # 更新任务状态
+        # 取消Celery任务
+        celery_revoked = False
+        if hasattr(task, 'celery_task_id') and task.celery_task_id:
+            try:
+                from app.workers.celery_app import celery_app
+
+                # 撤销Celery任务（terminate=True 强制终止正在执行的任务）
+                celery_app.control.revoke(
+                    task.celery_task_id,
+                    terminate=True,
+                    signal='SIGTERM'
+                )
+
+                celery_revoked = True
+
+                logger.info(
+                    "celery_task_revoked",
+                    task_id=task_id,
+                    celery_task_id=task.celery_task_id
+                )
+
+            except Exception as e:
+                logger.error(
+                    "celery_task_revoke_failed",
+                    task_id=task_id,
+                    celery_task_id=task.celery_task_id,
+                    error=str(e)
+                )
+
+        # 更新任务状态并保存到Redis
         task.status = TaskStatus.CANCELLED
-        self.task_storage[task_id] = task
+        await self.redis.set_task(
+            task_id=task_id,
+            task_data=task.model_dump(),
+            ttl=self.task_ttl
+        )
 
-        logger.info("task_cancelled", task_id=task_id)
-
-        # TODO: 取消Celery任务
-        # from app.workers.celery_app import celery_app
-        # celery_app.control.revoke(task_id, terminate=True)
+        logger.info("task_cancelled", task_id=task_id, celery_revoked=celery_revoked)
 
         return {
             "success": True,
             "task_id": task_id,
             "message": "任务已取消",
+            "celery_revoked": celery_revoked,
         }
 
-    def list_tasks(
+    async def list_tasks(
         self,
         status: Optional[TaskStatus] = None,
         limit: int = 50,
@@ -207,7 +275,15 @@ class TaskService:
         Returns:
             任务列表和分页信息
         """
-        tasks = list(self.task_storage.values())
+        # 从Redis获取所有任务ID
+        task_ids = await self.redis.list_tasks()
+
+        # 获取所有任务数据
+        tasks = []
+        for task_id in task_ids:
+            task_data = await self.redis.get_task(task_id)
+            if task_data:
+                tasks.append(Task(**task_data))
 
         # 状态过滤
         if status:
@@ -236,7 +312,7 @@ class TaskService:
             ],
         }
 
-    def update_task_status(
+    async def update_task_status(
         self,
         task_id: str,
         status: TaskStatus,
@@ -262,7 +338,7 @@ class TaskService:
         Raises:
             TaskNotFoundError: 任务不存在
         """
-        task = self.get_task(task_id)
+        task = await self.get_task(task_id)
 
         # 更新状态
         task.update_status(status, progress, current_step)
@@ -275,8 +351,12 @@ class TaskService:
         if error_message:
             task.set_error(error_message)
 
-        # 保存更新
-        self.task_storage[task_id] = task
+        # 保存更新到Redis
+        await self.redis.set_task(
+            task_id=task_id,
+            task_data=task.model_dump(),
+            ttl=self.task_ttl
+        )
 
         logger.info(
             "task_status_updated",

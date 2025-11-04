@@ -30,7 +30,7 @@ async def create_task(request: TaskCreateRequest):
     """
     try:
         # 调用Service层创建任务
-        task = task_service.create_task(request)
+        task = await task_service.create_task(request)
 
         return TaskResponse(
             task_id=task.task_id,
@@ -58,7 +58,7 @@ async def get_task_status(task_id: str):
     """
     try:
         # 调用Service层获取任务
-        task = task_service.get_task(task_id)
+        task = await task_service.get_task(task_id)
 
         return TaskResponse(
             task_id=task.task_id,
@@ -90,7 +90,7 @@ async def get_task_result(task_id: str):
     """
     try:
         # 调用Service层获取任务结果
-        result = task_service.get_task_result(task_id)
+        result = await task_service.get_task_result(task_id)
 
         return result
 
@@ -115,7 +115,7 @@ async def cancel_task(task_id: str):
     """
     try:
         # 调用Service层取消任务
-        result = task_service.cancel_task(task_id)
+        result = await task_service.cancel_task(task_id)
 
         return result
 
@@ -146,7 +146,7 @@ async def list_tasks(
     """
     try:
         # 调用Service层获取任务列表
-        result = task_service.list_tasks(status, limit, offset)
+        result = await task_service.list_tasks(status, limit, offset)
 
         return result
 

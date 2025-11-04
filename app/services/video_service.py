@@ -196,18 +196,64 @@ class VideoService:
 
         logger.info("importing_video_from_oss", video_id=video_id, oss_path=oss_path)
 
-        # TODO: 实现OSS下载逻辑
-        # from app.utils.oss_client import OSSClient
-        # oss = OSSClient()
-        # content = await oss.download(oss_path)
-        # result = self.save_video_file(content, filename, video_id)
+        # 实现OSS下载逻辑
+        try:
+            from app.utils.oss_client import oss_client
+            import os
+            from pathlib import Path
 
-        return {
-            "success": True,
-            "video_id": video_id,
-            "oss_path": oss_path,
-            "message": "OSS导入功能待实现",
-        }
+            # 生成本地存储路径
+            filename = os.path.basename(oss_path)
+            local_path = os.path.join(settings.videos_dir, f"{video_id}_{filename}")
+
+            # 确保目录存在
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+            # 从OSS下载到本地
+            await oss_client.download(
+                oss_path=oss_path,
+                local_path=local_path
+            )
+
+            # 验证下载的文件
+            if not os.path.exists(local_path):
+                raise StorageError(f"OSS下载后文件未找到: {local_path}")
+
+            file_size = os.path.getsize(local_path)
+
+            logger.info(
+                "video_imported_from_oss_success",
+                video_id=video_id,
+                oss_path=oss_path,
+                local_path=local_path,
+                file_size_mb=file_size / (1024 * 1024)
+            )
+
+            return {
+                "success": True,
+                "video_id": video_id,
+                "oss_path": oss_path,
+                "local_path": local_path,
+                "filename": filename,
+                "file_size": file_size,
+                "message": "视频已成功从OSS导入"
+            }
+
+        except Exception as e:
+            error_msg = f"OSS导入失败: {str(e)}"
+            logger.error(
+                "video_import_from_oss_failed",
+                video_id=video_id,
+                oss_path=oss_path,
+                error=error_msg
+            )
+            return {
+                "success": False,
+                "video_id": video_id,
+                "oss_path": oss_path,
+                "error": error_msg,
+                "message": "OSS导入失败"
+            }
 
     def get_video_info(self, video_id: str) -> Dict[str, Any]:
         """

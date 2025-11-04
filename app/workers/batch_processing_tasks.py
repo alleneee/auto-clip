@@ -14,6 +14,7 @@ import aiohttp
 from app.workers.celery_app import celery_app
 from app.config import settings
 from app.models.video_source import VideoSource, VideoSourceType
+from app.models.task import TaskStatus
 from app.models.batch_processing import (
     VideoAnalysisResult,
     ClipPlan,
@@ -825,3 +826,71 @@ def batch_process_videos_task(
     except Exception as e:
         logger.error(f"批处理任务 {task_id} 启动失败: {str(e)}", exc_info=True)
         raise
+
+
+# ======================
+# 任务服务专用任务
+# ======================
+
+
+@celery_app.task(
+    bind=True,
+    name='task_service.process_video_pipeline',
+    max_retries=2,
+    default_retry_delay=60
+)
+def process_video_pipeline_task(
+    self,
+    task_id: str,
+    video_ids: List[str],
+    config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    处理视频流水线任务（TaskService专用）
+
+    这是一个简化的任务，用于从TaskService触发视频处理流程
+
+    Args:
+        task_id: 任务ID（来自TaskService）
+        video_ids: 视频ID列表
+        config: 处理配置
+
+    Returns:
+        Dict: 任务结果信息
+    """
+    try:
+        logger.info(
+            f"开始处理任务 {task_id}",
+            video_count=len(video_ids),
+            celery_task_id=self.request.id
+        )
+
+        # 这里可以调用实际的批处理流程
+        # 或者实现自定义的处理逻辑
+
+        # 示例：简单返回成功状态
+        # 实际应用中，这里应该调用具体的视频处理逻辑
+
+        result = {
+            'task_id': task_id,
+            'celery_task_id': self.request.id,
+            'video_ids': video_ids,
+            'status': TaskStatus.PROCESSING.value,
+            'message': '任务已提交到Celery队列',
+            'config': config
+        }
+
+        logger.info(f"任务 {task_id} 提交成功: {self.request.id}")
+
+        return result
+
+    except Exception as e:
+        logger.error(
+            f"任务 {task_id} 处理失败: {str(e)}",
+            exc_info=True
+        )
+        return {
+            'task_id': task_id,
+            'status': TaskStatus.FAILED.value,
+            'error': str(e)
+        }

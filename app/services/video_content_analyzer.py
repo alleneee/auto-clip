@@ -5,7 +5,6 @@
 from typing import Dict, Any, Optional, List
 import asyncio
 
-from app.models.video import VideoMetadata
 from app.utils.ai_clients.dashscope_client import DashScopeClient
 from app.utils.ai_clients.paraformer_client import ParaformerClient
 from app.prompts import AudioTranscriptPrompts
@@ -83,7 +82,7 @@ class VideoContentAnalyzer:
                 "errors": [],
             }
 
-            for i, (task_type, result) in enumerate(zip([t[0] for t in tasks], results)):
+            for task_type, result in zip([t[0] for t in tasks], results):
                 if isinstance(result, Exception):
                     error_msg = str(result)
                     logger.error(f"{task_type}_analysis_failed", error=error_msg)
@@ -244,38 +243,68 @@ class VideoContentAnalyzer:
         self, video_path: str, output_path: str
     ) -> str:
         """
-        从视频中提取音频用于识别
+        使用MoviePy从视频中提取音频用于语音识别
+
+        提取的音频格式符合Paraformer ASR要求：
+        - 采样率：16kHz
+        - 声道：单声道
+        - 编码：PCM 16位
 
         Args:
             video_path: 视频文件路径
-            output_path: 输出音频文件路径
+            output_path: 输出音频文件路径（建议使用.wav格式）
 
         Returns:
             音频文件路径
 
-        注意：此方法仅提取音频，实际使用时需要将音频上传到公网URL
+        注意：此方法仅提取音频，实际使用时需要将音频上传到公网URL供Paraformer使用
+
+        Raises:
+            AnalysisError: 音频提取失败时抛出
         """
-        import ffmpeg
-
         try:
-            logger.info("extracting_audio", video_path=video_path)
+            logger.info("extracting_audio_with_moviepy", video_path=video_path)
 
-            # 使用FFmpeg提取音频
-            stream = ffmpeg.input(video_path)
-            stream = ffmpeg.output(
-                stream,
-                output_path,
-                acodec="pcm_s16le",  # 16位PCM
-                ar=16000,  # 16kHz采样率
-                ac=1,  # 单声道
+            # 使用MoviePy 2.x导入
+            from moviepy import VideoFileClip
+            import os
+
+            # 确保输出目录存在
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+            # 使用MoviePy加载视频并提取音频
+            with VideoFileClip(video_path) as video:
+                if not video.audio:
+                    logger.warning("video_has_no_audio", video_path=video_path)
+                    raise AnalysisError(f"视频文件不包含音频轨道: {video_path}")
+
+                # MoviePy 2.x: 提取音频并设置参数
+                # write_audiofile 参数：fps=采样率, nbytes=字节数, codec='pcm_s16le'
+                video.audio.write_audiofile(
+                    output_path,
+                    fps=16000,        # 16kHz采样率（Paraformer要求）
+                    nbytes=2,         # 16位 = 2字节
+                    codec='pcm_s16le', # PCM 16位小端编码
+                    ffmpeg_params=["-ac", "1"]  # 单声道
+                )
+
+            # 验证输出文件
+            if not os.path.exists(output_path):
+                raise AnalysisError(f"音频文件提取后未找到: {output_path}")
+
+            file_size = os.path.getsize(output_path)
+            logger.info(
+                "audio_extracted_successfully",
+                output_path=output_path,
+                file_size_mb=file_size / (1024 * 1024)
             )
-            ffmpeg.run(stream, overwrite_output=True, quiet=True)
 
-            logger.info("audio_extracted", output_path=output_path)
             return output_path
 
+        except AnalysisError:
+            raise
         except Exception as e:
-            logger.error("audio_extraction_failed", error=str(e))
+            logger.error("audio_extraction_failed", error=str(e), video_path=video_path)
             raise AnalysisError(f"音频提取失败: {str(e)}")
 
     def format_analysis_for_llm(self, analysis_result: Dict[str, Any]) -> str:
