@@ -28,11 +28,225 @@ from app.services import (
 )
 from app.utils.ai_clients.dashscope_client import DashScopeClient
 from app.utils.logger import logger
+from app.utils.json_parser import parse_json_with_model, JSONParseError
 
 
 # ======================
 # 辅助函数
 # ======================
+
+
+def extract_key_moments(analysis_text: str, video_duration: float) -> List[Dict[str, Any]]:
+    """
+    从AI分析文本中提取关键时刻
+
+    支持的时间格式：
+    - MM:SS (例如: 01:30)
+    - HH:MM:SS (例如: 00:01:30)
+    - 秒数 (例如: 90秒, 90s)
+
+    Args:
+        analysis_text: AI分析文本
+        video_duration: 视频总时长（秒）
+
+    Returns:
+        关键时刻列表，每项包含 timestamp, description, confidence
+    """
+    import re
+
+    if not analysis_text:
+        return []
+
+    key_moments = []
+
+    # 时间戳模式：HH:MM:SS, MM:SS, 或秒数
+    time_patterns = [
+        # HH:MM:SS 格式
+        (r'(\d{1,2}):(\d{2}):(\d{2})', lambda h, m, s: int(h) * 3600 + int(m) * 60 + int(s)),
+        # MM:SS 格式
+        (r'(?<!\d)(\d{1,2}):(\d{2})(?!\d)', lambda m, s: int(m) * 60 + int(s)),
+        # 秒数格式 (90秒, 90s)
+        (r'(\d+)\s*[秒s]', lambda s: int(s))
+    ]
+
+    # 关键词（用于判断这是一个关键时刻）
+    moment_keywords = [
+        '精彩', '高潮', '亮点', '关键', '重要', '特写', '转折',
+        'highlight', 'key', 'important', 'climax', 'peak'
+    ]
+
+    # 按行分割文本
+    lines = analysis_text.split('\n')
+
+    for line in lines:
+        line = line.strip()
+        if not line or len(line) < 10:
+            continue
+
+        # 检查是否包含关键词
+        has_keyword = any(kw in line.lower() for kw in moment_keywords)
+
+        # 尝试匹配时间戳
+        for pattern, converter in time_patterns:
+            matches = re.finditer(pattern, line)
+
+            for match in matches:
+                try:
+                    # 转换为秒数
+                    timestamp = converter(*match.groups())
+
+                    # 验证时间戳在视频范围内
+                    if timestamp < 0 or timestamp > video_duration:
+                        continue
+
+                    # 提取描述（时间戳前后的文本）
+                    start_pos = max(0, match.start() - 50)
+                    end_pos = min(len(line), match.end() + 100)
+                    description = line[start_pos:end_pos].strip()
+
+                    # 清理描述
+                    description = re.sub(r'\s+', ' ', description)
+
+                    # 计算置信度
+                    confidence = 0.5  # 基础置信度
+                    if has_keyword:
+                        confidence += 0.3
+                    if len(description) > 30:
+                        confidence += 0.2
+
+                    key_moments.append({
+                        'timestamp': timestamp,
+                        'description': description,
+                        'confidence': min(confidence, 1.0)
+                    })
+
+                except (ValueError, IndexError):
+                    continue
+
+    # 去重（相同或相近的时间戳）
+    unique_moments = []
+    seen_timestamps = set()
+
+    for moment in sorted(key_moments, key=lambda x: x['timestamp']):
+        timestamp = moment['timestamp']
+        # 5秒内的时间戳视为重复
+        if not any(abs(timestamp - seen) < 5 for seen in seen_timestamps):
+            unique_moments.append(moment)
+            seen_timestamps.add(timestamp)
+
+    logger.info(f"从分析文本中提取 {len(unique_moments)} 个关键时刻")
+    return unique_moments
+
+
+def calculate_clip_plan_quality(
+    clip_plan: Dict[str, Any],
+    analysis_results: List[Dict[str, Any]],
+    target_duration: Optional[float] = None
+) -> float:
+    """
+    计算剪辑方案质量评分
+
+    评分维度：
+    1. 视频覆盖率 (30%): 使用了多少源视频
+    2. 时长符合度 (25%): 与目标时长的匹配程度
+    3. 片段多样性 (20%): 片段数量和分布
+    4. 优先级质量 (15%): 高优先级片段比例
+    5. AI分析质量 (10%): reasoning的完整性
+
+    Args:
+        clip_plan: 剪辑方案字典
+        analysis_results: 分析结果列表
+        target_duration: 目标时长
+
+    Returns:
+        质量评分 (0.0-1.0)
+    """
+    segments = clip_plan.get('segments', [])
+    total_duration = clip_plan.get('total_duration', 0)
+    reasoning = clip_plan.get('reasoning', '')
+
+    if not segments:
+        return 0.0
+
+    scores = {}
+
+    # 1. 视频覆盖率 (30%)
+    valid_results = [r for r in analysis_results if r.get('status') == 'analyzed']
+    if valid_results:
+        used_videos = set(seg.get('video_index', -1) for seg in segments)
+        coverage_ratio = len(used_videos) / len(valid_results)
+        scores['coverage'] = min(coverage_ratio, 1.0) * 0.30
+    else:
+        scores['coverage'] = 0.0
+
+    # 2. 时长符合度 (25%)
+    if target_duration and target_duration > 0:
+        duration_diff = abs(total_duration - target_duration)
+        # 允许10%的误差范围
+        tolerance = target_duration * 0.1
+        if duration_diff <= tolerance:
+            duration_score = 1.0
+        else:
+            # 超出容差范围，线性递减
+            duration_score = max(0, 1.0 - (duration_diff - tolerance) / target_duration)
+        scores['duration'] = duration_score * 0.25
+    else:
+        # 无目标时长，评分基于总时长合理性 (60-300秒较好)
+        if 60 <= total_duration <= 300:
+            scores['duration'] = 0.25
+        elif total_duration < 60:
+            scores['duration'] = (total_duration / 60) * 0.25
+        else:
+            scores['duration'] = max(0, (600 - total_duration) / 300) * 0.25
+
+    # 3. 片段多样性 (20%)
+    segment_count = len(segments)
+    if segment_count >= 5:
+        diversity_score = 1.0
+    elif segment_count >= 3:
+        diversity_score = 0.8
+    elif segment_count >= 2:
+        diversity_score = 0.6
+    else:
+        diversity_score = 0.4
+    scores['diversity'] = diversity_score * 0.20
+
+    # 4. 优先级质量 (15%)
+    priorities = [seg.get('priority', 0) for seg in segments]
+    if priorities:
+        high_priority_count = sum(1 for p in priorities if p >= 7)
+        priority_ratio = high_priority_count / len(priorities)
+        avg_priority = sum(priorities) / len(priorities)
+        # 综合考虑高优先级比例和平均优先级
+        priority_score = (priority_ratio * 0.6 + (avg_priority / 10) * 0.4)
+        scores['priority'] = min(priority_score, 1.0) * 0.15
+    else:
+        scores['priority'] = 0.0
+
+    # 5. AI分析质量 (10%)
+    if reasoning and len(reasoning) > 20:
+        # 基于reasoning长度和关键词
+        reasoning_keywords = ['精彩', '高潮', '重点', '关键', '亮点', 'highlight']
+        keyword_count = sum(1 for kw in reasoning_keywords if kw in reasoning.lower())
+        reasoning_score = min(0.5 + keyword_count * 0.1, 1.0)
+        scores['reasoning'] = reasoning_score * 0.10
+    else:
+        scores['reasoning'] = 0.05  # 基础分
+
+    # 计算总分
+    total_score = sum(scores.values())
+
+    logger.info(
+        f"质量评分详情: "
+        f"覆盖率={scores.get('coverage', 0):.3f}, "
+        f"时长={scores.get('duration', 0):.3f}, "
+        f"多样性={scores.get('diversity', 0):.3f}, "
+        f"优先级={scores.get('priority', 0):.3f}, "
+        f"推理={scores.get('reasoning', 0):.3f}, "
+        f"总分={total_score:.3f}"
+    )
+
+    return round(total_score, 3)
 
 def run_async(coro):
     """在 Celery 任务中运行异步函数"""
@@ -290,14 +504,16 @@ def analyze_video_task(
             )
         )
 
-        # 提取关键时刻（简化版，实际应该解析 AI 返回）
-        # TODO: 实现更智能的关键时刻提取
-        key_moments = []
+        # 提取关键时刻（从AI分析文本中智能提取）
+        analysis_text = analysis_result.get('output', {}).get('text', '')
+        video_duration = compressed_video.get('duration', 0)
+
+        key_moments = extract_key_moments(analysis_text, video_duration)
 
         return {
             **compressed_video,
             'vl_analysis': analysis_result,
-            'analysis_summary': analysis_result.get('output', {}).get('text', ''),
+            'analysis_summary': analysis_text,
             'key_moments': key_moments,
             'status': 'analyzed'
         }
@@ -397,43 +613,46 @@ def generate_clip_plan_task(
             )
         )
 
-        # 解析剪辑方案（简化版）
-        # TODO: 实现更健壮的 JSON 解析和验证
-        import json
+        # 解析剪辑方案（使用健壮的JSON解析器）
         clip_plan_text = clip_plan_result.get('output', {}).get('text', '{}')
 
-        # 尝试提取 JSON
+        # 使用健壮的JSON解析和Pydantic验证
         try:
-            # 查找 JSON 内容
-            start_idx = clip_plan_text.find('{')
-            end_idx = clip_plan_text.rfind('}') + 1
-            if start_idx != -1 and end_idx > start_idx:
-                clip_plan_json = json.loads(clip_plan_text[start_idx:end_idx])
-            else:
-                raise ValueError("未找到有效的 JSON")
-        except Exception as parse_error:
-            logger.warning(f"解析剪辑方案 JSON 失败: {parse_error}, 使用默认方案")
+            clip_plan = parse_json_with_model(clip_plan_text, ClipPlan, strict=False)
+            clip_plan_json = clip_plan.dict()
+            logger.info("成功解析并验证AI生成的剪辑方案")
+        except JSONParseError as parse_error:
+            logger.warning(f"解析剪辑方案失败: {parse_error}, 使用默认方案")
             # 生成默认剪辑方案（取每个视频的前30秒）
-            clip_plan_json = {
-                'strategy': '默认剪辑策略：取每个视频的精彩片段',
-                'total_duration': min(target_duration or 180, sum(r['duration'] for r in valid_results)),
-                'segments': [
-                    {
-                        'video_index': r['video_index'],
-                        'start_time': 0,
-                        'end_time': min(30, r['duration']),
-                        'duration': min(30, r['duration']),
-                        'reason': '视频开头精彩片段',
-                        'priority': 5
-                    }
-                    for r in valid_results
-                ],
-                'reasoning': '由于 AI 生成方案解析失败，使用默认策略'
-            }
+            default_segments = [
+                ClipSegment(
+                    video_index=r['video_index'],
+                    start_time=0,
+                    end_time=min(30, r['duration']),
+                    duration=min(30, r['duration']),
+                    reason='视频开头精彩片段',
+                    priority=5
+                )
+                for r in valid_results
+            ]
+            clip_plan = ClipPlan(
+                strategy='默认剪辑策略：取每个视频的精彩片段',
+                total_duration=min(target_duration or 180, sum(r['duration'] for r in valid_results)),
+                segments=default_segments,
+                reasoning='由于AI生成方案解析失败，使用默认策略'
+            )
+            clip_plan_json = clip_plan.dict()
+
+        # 计算质量评分
+        quality_score = calculate_clip_plan_quality(
+            clip_plan_json,
+            analysis_results,
+            target_duration
+        )
 
         return {
             **clip_plan_json,
-            'quality_score': 0.8,  # TODO: 实现质量评分
+            'quality_score': quality_score,
             'error': None
         }
 

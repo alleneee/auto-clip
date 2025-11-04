@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 # MoviePy 2.x 标准导入
-from moviepy import VideoFileClip, concatenate_videoclips, CompositeVideoClip
+from moviepy import VideoFileClip, concatenate_videoclips, CompositeVideoClip, vfx
 
 from app.config import settings
 from app.models.batch_processing import ClipSegment
@@ -150,8 +150,28 @@ class VideoEditingService:
 
             # 拼接视频
             if add_transitions:
-                # TODO: 添加转场效果（淡入淡出等）
-                final_clip = concatenate_videoclips(clips, method="compose")
+                # 添加转场效果（淡入淡出）
+                transition_duration = 0.5  # 转场时长（秒）
+
+                # 为每个片段添加淡入淡出效果
+                clips_with_transitions = []
+                for i, clip in enumerate(clips):
+                    # 第一个片段：只淡入
+                    if i == 0:
+                        clip = clip.with_effects([vfx.FadeIn(transition_duration)])
+                    # 最后一个片段：只淡出
+                    elif i == len(clips) - 1:
+                        clip = clip.with_effects([vfx.FadeOut(transition_duration)])
+                    # 中间片段：淡入+淡出
+                    else:
+                        clip = clip.with_effects([
+                            vfx.FadeIn(transition_duration),
+                            vfx.FadeOut(transition_duration)
+                        ])
+                    clips_with_transitions.append(clip)
+
+                # 使用compose方法拼接，允许重叠实现交叉淡化
+                final_clip = concatenate_videoclips(clips_with_transitions, method="compose")
             else:
                 final_clip = concatenate_videoclips(clips)
 
