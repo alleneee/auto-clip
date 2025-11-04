@@ -15,6 +15,7 @@ from app.core.middleware import (
     CORSSecurityMiddleware,
 )
 from app.api.v1 import videos, tasks
+from app.api.v1.batch import router as batch_router
 
 # 设置日志
 setup_logging(log_level="DEBUG" if settings.DEBUG else "INFO")
@@ -34,6 +35,9 @@ async def lifespan(app: FastAPI):
         settings.processed_dir,
         settings.cache_dir,
         settings.metadata_dir,
+        settings.temp_dir,
+        settings.compressed_dir,
+        settings.videos_dir,
     ]:
         os.makedirs(directory, exist_ok=True)
 
@@ -115,6 +119,12 @@ app.include_router(
     tasks.router,
     prefix=f"{settings.API_V1_PREFIX}/tasks",
     tags=["Tasks"],
+)
+
+app.include_router(
+    batch_router,
+    prefix=settings.API_V1_PREFIX,
+    tags=["Batch Processing"],
 )
 
 
