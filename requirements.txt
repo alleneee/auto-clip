@@ -26,7 +26,11 @@ pydantic-settings==2.1.0
 
 # HTTP客户端
 httpx==0.25.2
+aiohttp==3.9.1
 aiofiles==23.2.1
+
+# 异步工具
+nest-asyncio==1.5.8
 
 # 日志和监控
 structlog==23.2.0
