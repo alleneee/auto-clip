@@ -1,18 +1,14 @@
 """
 视频剪辑服务
-使用 MoviePy 2.0+ 进行视频剪辑、拼接和后处理
+使用 MoviePy 2.x 进行视频剪辑、拼接和后处理
 """
 import os
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
 
-try:
-    # MoviePy 2.0+ 导入方式
-    from moviepy import VideoFileClip, concatenate_videoclips, CompositeVideoClip
-except ImportError:
-    # 兼容 MoviePy 1.x
-    from moviepy.editor import VideoFileClip, concatenate_videoclips, CompositeVideoClip
+# MoviePy 2.x 标准导入
+from moviepy import VideoFileClip, concatenate_videoclips, CompositeVideoClip
 
 from app.config import settings
 from app.models.batch_processing import ClipSegment
@@ -20,7 +16,7 @@ from app.utils.logger import logger
 
 
 class VideoEditingService:
-    """视频剪辑服务"""
+    """视频剪辑服务 - MoviePy 2.x"""
 
     def __init__(self):
         """初始化视频剪辑服务"""
@@ -76,7 +72,7 @@ class VideoEditingService:
                 f"  输出: {output_path}"
             )
 
-            # 加载视频并提取子片段
+            # 加载视频并提取子片段 (MoviePy 2.x 使用 subclipped)
             with VideoFileClip(video_path) as video:
                 # 验证时间范围
                 if end_time > video.duration:
@@ -86,27 +82,15 @@ class VideoEditingService:
                     )
                     end_time = video.duration
 
-                # 提取子片段
-                clip = video.subclip(start_time, end_time)
+                # MoviePy 2.x: subclipped() 方法
+                clip = video.subclipped(start_time, end_time)
 
-                # 写入文件（MoviePy 2.0+ 兼容）
-                try:
-                    # MoviePy 2.0+ 使用 logger='bar' 或 None
-                    clip.write_videofile(
-                        output_path,
-                        codec=settings.OUTPUT_VIDEO_CODEC,
-                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
-                        verbose=False,
-                        logger=None
-                    )
-                except TypeError:
-                    # MoviePy 1.x 回退
-                    clip.write_videofile(
-                        output_path,
-                        codec=settings.OUTPUT_VIDEO_CODEC,
-                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
-                        verbose=False
-                    )
+                # MoviePy 2.x: write_videofile 不再支持 verbose/logger 参数
+                clip.write_videofile(
+                    output_path,
+                    codec=settings.OUTPUT_VIDEO_CODEC,
+                    audio_codec=settings.OUTPUT_AUDIO_CODEC
+                )
 
             logger.info(f"视频片段提取成功: {output_path}")
             return output_path
@@ -177,45 +161,22 @@ class VideoEditingService:
             # 获取输出质量设置
             quality_settings = self.output_quality_map.get(output_quality)
 
-            # 写入最终视频（MoviePy 2.0+ 兼容）
-            try:
-                if quality_settings:
-                    final_clip.write_videofile(
-                        output_path,
-                        codec=settings.OUTPUT_VIDEO_CODEC,
-                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
-                        bitrate=quality_settings['bitrate'],
-                        preset=quality_settings['preset'],
-                        verbose=False,
-                        logger=None
-                    )
-                else:
-                    # 保持原始质量
-                    final_clip.write_videofile(
-                        output_path,
-                        codec=settings.OUTPUT_VIDEO_CODEC,
-                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
-                        verbose=False,
-                        logger=None
-                    )
-            except TypeError:
-                # MoviePy 1.x 回退（不支持 logger 参数）
-                if quality_settings:
-                    final_clip.write_videofile(
-                        output_path,
-                        codec=settings.OUTPUT_VIDEO_CODEC,
-                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
-                        bitrate=quality_settings['bitrate'],
-                        preset=quality_settings['preset'],
-                        verbose=False
-                    )
-                else:
-                    final_clip.write_videofile(
-                        output_path,
-                        codec=settings.OUTPUT_VIDEO_CODEC,
-                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
-                        verbose=False
-                    )
+            # MoviePy 2.x: write_videofile 不再支持 verbose/logger 参数
+            if quality_settings:
+                final_clip.write_videofile(
+                    output_path,
+                    codec=settings.OUTPUT_VIDEO_CODEC,
+                    audio_codec=settings.OUTPUT_AUDIO_CODEC,
+                    bitrate=quality_settings['bitrate'],
+                    preset=quality_settings['preset']
+                )
+            else:
+                # 保持原始质量
+                final_clip.write_videofile(
+                    output_path,
+                    codec=settings.OUTPUT_VIDEO_CODEC,
+                    audio_codec=settings.OUTPUT_AUDIO_CODEC
+                )
 
             # 清理片段对象
             for clip in clips:

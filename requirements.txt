@@ -8,14 +8,12 @@ celery==5.3.4
 redis==5.0.1
 flower==2.0.1
 
-# 视频处理
-moviepy==1.0.3
-ffmpeg-python==0.2.0
+# 视频处理 - MoviePy 2.x only
+moviepy>=2.0.0,<3.0.0
+ffmpeg-python>=0.2.0
 
 # AI服务 - 阿里云DashScope
 dashscope==1.14.1
-alibabacloud-tea-openapi==0.3.9
-alibabacloud-nls-cloud-meta20220816==1.0.0
 
 # 存储
 oss2==2.18.4
