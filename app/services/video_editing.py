@@ -1,17 +1,18 @@
 """
 视频剪辑服务
-使用 MoviePy 进行视频剪辑、拼接和后处理
+使用 MoviePy 2.0+ 进行视频剪辑、拼接和后处理
 """
 import os
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
 
-from moviepy.editor import (
-    VideoFileClip,
-    concatenate_videoclips,
-    CompositeVideoClip
-)
+try:
+    # MoviePy 2.0+ 导入方式
+    from moviepy import VideoFileClip, concatenate_videoclips, CompositeVideoClip
+except ImportError:
+    # 兼容 MoviePy 1.x
+    from moviepy.editor import VideoFileClip, concatenate_videoclips, CompositeVideoClip
 
 from app.config import settings
 from app.models.batch_processing import ClipSegment
@@ -88,14 +89,24 @@ class VideoEditingService:
                 # 提取子片段
                 clip = video.subclip(start_time, end_time)
 
-                # 写入文件
-                clip.write_videofile(
-                    output_path,
-                    codec=settings.OUTPUT_VIDEO_CODEC,
-                    audio_codec=settings.OUTPUT_AUDIO_CODEC,
-                    verbose=False,
-                    logger=None  # 禁用 MoviePy 日志
-                )
+                # 写入文件（MoviePy 2.0+ 兼容）
+                try:
+                    # MoviePy 2.0+ 使用 logger='bar' 或 None
+                    clip.write_videofile(
+                        output_path,
+                        codec=settings.OUTPUT_VIDEO_CODEC,
+                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
+                        verbose=False,
+                        logger=None
+                    )
+                except TypeError:
+                    # MoviePy 1.x 回退
+                    clip.write_videofile(
+                        output_path,
+                        codec=settings.OUTPUT_VIDEO_CODEC,
+                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
+                        verbose=False
+                    )
 
             logger.info(f"视频片段提取成功: {output_path}")
             return output_path
@@ -166,26 +177,45 @@ class VideoEditingService:
             # 获取输出质量设置
             quality_settings = self.output_quality_map.get(output_quality)
 
-            # 写入最终视频
-            if quality_settings:
-                final_clip.write_videofile(
-                    output_path,
-                    codec=settings.OUTPUT_VIDEO_CODEC,
-                    audio_codec=settings.OUTPUT_AUDIO_CODEC,
-                    bitrate=quality_settings['bitrate'],
-                    preset=quality_settings['preset'],
-                    verbose=False,
-                    logger=None
-                )
-            else:
-                # 保持原始质量
-                final_clip.write_videofile(
-                    output_path,
-                    codec=settings.OUTPUT_VIDEO_CODEC,
-                    audio_codec=settings.OUTPUT_AUDIO_CODEC,
-                    verbose=False,
-                    logger=None
-                )
+            # 写入最终视频（MoviePy 2.0+ 兼容）
+            try:
+                if quality_settings:
+                    final_clip.write_videofile(
+                        output_path,
+                        codec=settings.OUTPUT_VIDEO_CODEC,
+                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
+                        bitrate=quality_settings['bitrate'],
+                        preset=quality_settings['preset'],
+                        verbose=False,
+                        logger=None
+                    )
+                else:
+                    # 保持原始质量
+                    final_clip.write_videofile(
+                        output_path,
+                        codec=settings.OUTPUT_VIDEO_CODEC,
+                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
+                        verbose=False,
+                        logger=None
+                    )
+            except TypeError:
+                # MoviePy 1.x 回退（不支持 logger 参数）
+                if quality_settings:
+                    final_clip.write_videofile(
+                        output_path,
+                        codec=settings.OUTPUT_VIDEO_CODEC,
+                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
+                        bitrate=quality_settings['bitrate'],
+                        preset=quality_settings['preset'],
+                        verbose=False
+                    )
+                else:
+                    final_clip.write_videofile(
+                        output_path,
+                        codec=settings.OUTPUT_VIDEO_CODEC,
+                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
+                        verbose=False
+                    )
 
             # 清理片段对象
             for clip in clips:
