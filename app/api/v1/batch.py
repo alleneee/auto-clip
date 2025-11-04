@@ -2,7 +2,7 @@
 批处理 API 端点
 多视频批量处理、AI分析和自动剪辑
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException
 from typing import Dict, Any
 
 from app.models.batch_processing import (
@@ -19,8 +19,7 @@ router = APIRouter(prefix="/batch", tags=["Batch Processing"])
 
 @router.post("/process", response_model=BatchProcessResponse)
 async def create_batch_process(
-    request: BatchProcessRequest,
-    background_tasks: BackgroundTasks
+    request: BatchProcessRequest
 ) -> BatchProcessResponse:
     """
     创建批处理任务
