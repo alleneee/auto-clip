@@ -4,7 +4,7 @@
 """
 from functools import lru_cache
 from typing import Optional, List
-from pydantic import Field, validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -67,18 +67,69 @@ class Settings(BaseSettings):
     WEBHOOK_URL: Optional[str] = None
     WEBHOOK_SECRET: Optional[str] = None
 
-    @validator("SUPPORTED_FORMATS", pre=True)
+    # ===== 视频压缩配置 =====
+    DEFAULT_COMPRESSION_PROFILE: str = Field(
+        default="balanced",
+        description="默认压缩策略: aggressive/balanced/conservative/dynamic"
+    )
+    MAX_VIDEO_DURATION: int = Field(
+        default=600,
+        description="最大视频时长（秒），超过则拒绝处理"
+    )
+
+    # ===== 批处理配置 =====
+    MAX_BATCH_SIZE: int = Field(
+        default=10,
+        ge=1,
+        le=20,
+        description="最大批处理视频数量"
+    )
+    BATCH_PARALLEL_LIMIT: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="批处理并行任务数限制"
+    )
+
+    # ===== 临时存储配置 =====
+    TEMP_STORAGE_EXPIRY_HOURS: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        description="临时文件默认过期时间（小时）"
+    )
+    TEMP_STORAGE_CLEANUP_INTERVAL: int = Field(
+        default=3600,
+        description="临时文件清理间隔（秒）"
+    )
+    OSS_TEMP_URL_EXPIRY: int = Field(
+        default=86400,
+        description="OSS临时签名URL过期时间（秒）"
+    )
+
+    @field_validator("SUPPORTED_FORMATS", mode="before")
+    @classmethod
     def parse_supported_formats(cls, v):
         """解析支持的格式列表"""
         if isinstance(v, str):
             return [fmt.strip() for fmt in v.split(",")]
         return v
 
-    @validator("STORAGE_BACKEND")
+    @field_validator("STORAGE_BACKEND")
+    @classmethod
     def validate_storage_backend(cls, v):
         """验证存储模式"""
         if v not in ["local", "oss", "hybrid"]:
             raise ValueError("STORAGE_BACKEND must be one of: local, oss, hybrid")
+        return v
+
+    @field_validator("DEFAULT_COMPRESSION_PROFILE")
+    @classmethod
+    def validate_compression_profile(cls, v):
+        """验证压缩策略"""
+        valid_profiles = ["aggressive", "balanced", "conservative", "dynamic"]
+        if v not in valid_profiles:
+            raise ValueError(f"DEFAULT_COMPRESSION_PROFILE must be one of: {', '.join(valid_profiles)}")
         return v
 
     @property
@@ -100,6 +151,21 @@ class Settings(BaseSettings):
     def metadata_dir(self) -> str:
         """元数据目录"""
         return f"{self.LOCAL_STORAGE_PATH}/metadata"
+
+    @property
+    def temp_dir(self) -> str:
+        """临时文件目录"""
+        return f"{self.LOCAL_STORAGE_PATH}/temp"
+
+    @property
+    def compressed_dir(self) -> str:
+        """压缩视频目录"""
+        return f"{self.LOCAL_STORAGE_PATH}/compressed"
+
+    @property
+    def videos_dir(self) -> str:
+        """原始视频目录"""
+        return f"{self.LOCAL_STORAGE_PATH}/videos"
 
     class Config:
         env_file = ".env"
