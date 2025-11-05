@@ -9,7 +9,6 @@ from typing import Optional, List, Dict
 from pathlib import Path
 
 import oss2
-from oss2.models import SignedUrlRequest
 
 from app.config import settings
 from app.utils.logger import logger

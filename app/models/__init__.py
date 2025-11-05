@@ -1,15 +1,15 @@
 """
-pn!�!W
-+@	 Pydantic pn!�
+数据模型模块
+Pydantic 模型定义
 """
-from .video import Video
+from .video import VideoMetadata, VideoImportRequest
 from .task import Task
 from .clip_decision import ClipDecision
 from .responses import (
-    VideoUploadResponse,
-    VideoAnalysisResponse,
-    TaskResponse,
-    ErrorResponse
+    ErrorDetail,
+    SuccessResponse,
+    ErrorResponse,
+    ValidationErrorResponse
 )
 from .video_source import (
     VideoSourceType,
@@ -29,23 +29,24 @@ from .batch_processing import (
 )
 
 __all__ = [
-    # �	!�
-    "Video",
+    # 核心模型
+    "VideoMetadata",
+    "VideoImportRequest",
     "Task",
     "ClipDecision",
-    "VideoUploadResponse",
-    "VideoAnalysisResponse",
-    "TaskResponse",
+    "ErrorDetail",
+    "SuccessResponse",
     "ErrorResponse",
+    "ValidationErrorResponse",
 
-    # Ƒe�!�
+    # 视频源模型
     "VideoSourceType",
     "VideoSource",
     "CompressionProfile",
     "COMPRESSION_PROFILES",
     "get_dynamic_compression_profile",
 
-    # y!�
+    # 批处理模型
     "BatchProcessStatus",
     "VideoAnalysisResult",
     "ClipSegment",

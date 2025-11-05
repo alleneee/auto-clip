@@ -1,18 +1,23 @@
 """
-视频剪辑服务
-使用 MoviePy 2.x 进行视频剪辑、拼接和后处理
+视频剪辑服务 - 符合单一职责原则
+职责: 视频剪辑业务编排（业务层）
+底层操作: 使用 video_utils 工具函数
+
+重构说明：
+- extract_clip() 使用 video_utils.extract_video_clip()
+- concatenate_clips() 使用 video_utils.concatenate_video_clips()
+- get_video_duration() 使用 video_utils.get_video_info()
+- Service层专注业务编排、参数验证、异常处理
 """
 import os
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
 
-# MoviePy 2.x 标准导入
-from moviepy import VideoFileClip, concatenate_videoclips, CompositeVideoClip, vfx
-
 from app.config import settings
 from app.models.batch_processing import ClipSegment
 from app.utils.logger import logger
+from app.utils.video_utils import extract_video_clip, concatenate_video_clips, get_video_info
 
 
 class VideoEditingService:
@@ -35,7 +40,7 @@ class VideoEditingService:
         output_path: Optional[str] = None
     ) -> str:
         """
-        从视频中提取片段
+        从视频中提取片段（业务编排层）
 
         Args:
             video_path: 源视频路径
@@ -49,6 +54,7 @@ class VideoEditingService:
         Raises:
             ValueError: 时间范围无效或视频处理失败
         """
+        # 业务层参数验证
         if not os.path.exists(video_path):
             raise ValueError(f"源视频不存在: {video_path}")
 
@@ -72,32 +78,28 @@ class VideoEditingService:
                 f"  输出: {output_path}"
             )
 
-            # 加载视频并提取子片段 (MoviePy 2.x 使用 subclipped)
-            with VideoFileClip(video_path) as video:
-                # 验证时间范围
-                if end_time > video.duration:
-                    logger.warning(
-                        f"结束时间 {end_time}s 超过视频时长 {video.duration}s，"
-                        f"调整为 {video.duration}s"
-                    )
-                    end_time = video.duration
+            # 调用底层工具函数
+            result_path = extract_video_clip(
+                video_path=video_path,
+                start_time=start_time,
+                end_time=end_time,
+                output_path=output_path,
+                codec=settings.OUTPUT_VIDEO_CODEC,
+                audio_codec=settings.OUTPUT_AUDIO_CODEC
+            )
 
-                # MoviePy 2.x: subclipped() 方法
-                clip = video.subclipped(start_time, end_time)
+            logger.info(f"视频片段提取成功: {result_path}")
+            return result_path
 
-                # MoviePy 2.x: write_videofile 不再支持 verbose/logger 参数
-                clip.write_videofile(
-                    output_path,
-                    codec=settings.OUTPUT_VIDEO_CODEC,
-                    audio_codec=settings.OUTPUT_AUDIO_CODEC
-                )
-
-            logger.info(f"视频片段提取成功: {output_path}")
-            return output_path
-
-        except Exception as e:
+        except RuntimeError as e:
+            # 业务异常转换
             logger.error(f"提取视频片段失败: {str(e)}", exc_info=True)
             # 清理失败的输出文件
+            if output_path and os.path.exists(output_path):
+                os.remove(output_path)
+            raise ValueError(f"视频剪辑失败: {str(e)}")
+        except Exception as e:
+            logger.error(f"提取视频片段异常: {str(e)}", exc_info=True)
             if output_path and os.path.exists(output_path):
                 os.remove(output_path)
             raise ValueError(f"视频剪辑失败: {str(e)}")
@@ -110,7 +112,7 @@ class VideoEditingService:
         add_transitions: bool = False
     ) -> Tuple[str, Dict[str, Any]]:
         """
-        拼接多个视频片段
+        拼接多个视频片段（业务编排层）
 
         Args:
             clip_paths: 视频片段路径列表
@@ -124,6 +126,7 @@ class VideoEditingService:
         Raises:
             ValueError: 片段列表为空或拼接失败
         """
+        # 业务层参数验证
         if not clip_paths:
             raise ValueError("视频片段列表为空")
 
@@ -139,30 +142,67 @@ class VideoEditingService:
                 f"开始拼接视频片段:\n"
                 f"  片段数量: {len(clip_paths)}\n"
                 f"  输出质量: {output_quality}\n"
+                f"  添加转场: {add_transitions}\n"
                 f"  输出路径: {output_path}"
             )
 
-            # 加载所有视频片段
-            clips = [VideoFileClip(path) for path in clip_paths]
+            # 确保输出目录存在
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-            # 计算总时长
-            total_duration = sum(clip.duration for clip in clips)
+            # 如果不需要转场效果，使用工具函数（简单快速）
+            if not add_transitions:
+                # 调用底层工具函数
+                result_path = concatenate_video_clips(
+                    clip_paths=clip_paths,
+                    output_path=output_path,
+                    method="compose",
+                    codec=settings.OUTPUT_VIDEO_CODEC,
+                    audio_codec=settings.OUTPUT_AUDIO_CODEC
+                )
 
-            # 拼接视频
-            if add_transitions:
+                # 计算统计信息
+                processing_time = (datetime.now() - start_time).total_seconds()
+                output_size = os.path.getsize(result_path)
+
+                # 计算总时长（通过读取输出视频）
+                info = get_video_info(result_path)
+                total_duration = info['duration']
+
+                stats = {
+                    'clip_count': len(clip_paths),
+                    'total_duration': total_duration,
+                    'output_size': output_size,
+                    'output_size_mb': output_size / (1024 * 1024),
+                    'processing_time': processing_time,
+                    'output_quality': output_quality
+                }
+
+                logger.info(
+                    f"视频拼接成功:\n"
+                    f"  片段数: {stats['clip_count']}\n"
+                    f"  总时长: {stats['total_duration']:.2f}秒\n"
+                    f"  文件大小: {stats['output_size_mb']:.2f}MB\n"
+                    f"  处理耗时: {stats['processing_time']:.2f}秒"
+                )
+
+                return result_path, stats
+
+            else:
+                # 带转场效果需要使用 MoviePy（业务功能）
+                from moviepy import VideoFileClip, concatenate_videoclips, vfx
+
+                clips = [VideoFileClip(path) for path in clip_paths]
+                total_duration = sum(clip.duration for clip in clips)
+
                 # 添加转场效果（淡入淡出）
-                transition_duration = 0.5  # 转场时长（秒）
-
-                # 为每个片段添加淡入淡出效果
+                transition_duration = 0.5
                 clips_with_transitions = []
+
                 for i, clip in enumerate(clips):
-                    # 第一个片段：只淡入
                     if i == 0:
                         clip = clip.with_effects([vfx.FadeIn(transition_duration)])
-                    # 最后一个片段：只淡出
                     elif i == len(clips) - 1:
                         clip = clip.with_effects([vfx.FadeOut(transition_duration)])
-                    # 中间片段：淡入+淡出
                     else:
                         clip = clip.with_effects([
                             vfx.FadeIn(transition_duration),
@@ -170,65 +210,61 @@ class VideoEditingService:
                         ])
                     clips_with_transitions.append(clip)
 
-                # 使用compose方法拼接，允许重叠实现交叉淡化
                 final_clip = concatenate_videoclips(clips_with_transitions, method="compose")
-            else:
-                final_clip = concatenate_videoclips(clips)
 
-            # 确保输出目录存在
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                # 获取输出质量设置
+                quality_settings = self.output_quality_map.get(output_quality)
 
-            # 获取输出质量设置
-            quality_settings = self.output_quality_map.get(output_quality)
+                if quality_settings:
+                    final_clip.write_videofile(
+                        output_path,
+                        codec=settings.OUTPUT_VIDEO_CODEC,
+                        audio_codec=settings.OUTPUT_AUDIO_CODEC,
+                        bitrate=quality_settings['bitrate'],
+                        preset=quality_settings['preset']
+                    )
+                else:
+                    final_clip.write_videofile(
+                        output_path,
+                        codec=settings.OUTPUT_VIDEO_CODEC,
+                        audio_codec=settings.OUTPUT_AUDIO_CODEC
+                    )
 
-            # MoviePy 2.x: write_videofile 不再支持 verbose/logger 参数
-            if quality_settings:
-                final_clip.write_videofile(
-                    output_path,
-                    codec=settings.OUTPUT_VIDEO_CODEC,
-                    audio_codec=settings.OUTPUT_AUDIO_CODEC,
-                    bitrate=quality_settings['bitrate'],
-                    preset=quality_settings['preset']
+                # 清理
+                for clip in clips:
+                    clip.close()
+                final_clip.close()
+
+                # 计算统计信息
+                processing_time = (datetime.now() - start_time).total_seconds()
+                output_size = os.path.getsize(output_path)
+
+                stats = {
+                    'clip_count': len(clip_paths),
+                    'total_duration': total_duration,
+                    'output_size': output_size,
+                    'output_size_mb': output_size / (1024 * 1024),
+                    'processing_time': processing_time,
+                    'output_quality': output_quality
+                }
+
+                logger.info(
+                    f"视频拼接成功（带转场）:\n"
+                    f"  片段数: {stats['clip_count']}\n"
+                    f"  总时长: {stats['total_duration']:.2f}秒\n"
+                    f"  文件大小: {stats['output_size_mb']:.2f}MB\n"
+                    f"  处理耗时: {stats['processing_time']:.2f}秒"
                 )
-            else:
-                # 保持原始质量
-                final_clip.write_videofile(
-                    output_path,
-                    codec=settings.OUTPUT_VIDEO_CODEC,
-                    audio_codec=settings.OUTPUT_AUDIO_CODEC
-                )
 
-            # 清理片段对象
-            for clip in clips:
-                clip.close()
-            final_clip.close()
+                return output_path, stats
 
-            # 计算统计信息
-            processing_time = (datetime.now() - start_time).total_seconds()
-            output_size = os.path.getsize(output_path)
-
-            stats = {
-                'clip_count': len(clip_paths),
-                'total_duration': total_duration,
-                'output_size': output_size,
-                'output_size_mb': output_size / (1024 * 1024),
-                'processing_time': processing_time,
-                'output_quality': output_quality
-            }
-
-            logger.info(
-                f"视频拼接成功:\n"
-                f"  片段数: {stats['clip_count']}\n"
-                f"  总时长: {stats['total_duration']:.2f}秒\n"
-                f"  文件大小: {stats['output_size_mb']:.2f}MB\n"
-                f"  处理耗时: {stats['processing_time']:.2f}秒"
-            )
-
-            return output_path, stats
-
-        except Exception as e:
+        except RuntimeError as e:
             logger.error(f"拼接视频失败: {str(e)}", exc_info=True)
-            # 清理失败的输出文件
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise ValueError(f"视频拼接失败: {str(e)}")
+        except Exception as e:
+            logger.error(f"拼接视频异常: {str(e)}", exc_info=True)
             if os.path.exists(output_path):
                 os.remove(output_path)
             raise ValueError(f"视频拼接失败: {str(e)}")
@@ -340,20 +376,24 @@ class VideoEditingService:
 
     async def get_video_duration(self, video_path: str) -> float:
         """
-        获取视频时长
+        获取视频时长（业务层封装）
 
         Args:
             video_path: 视频文件路径
 
         Returns:
             float: 视频时长（秒）
+
+        Raises:
+            ValueError: 视频文件不存在或读取失败
         """
         if not os.path.exists(video_path):
             raise ValueError(f"视频文件不存在: {video_path}")
 
         try:
-            with VideoFileClip(video_path) as video:
-                return video.duration
+            # 使用 video_utils 获取视频信息
+            info = get_video_info(video_path)
+            return info['duration']
         except Exception as e:
             logger.error(f"获取视频时长失败: {str(e)}")
             raise ValueError(f"无法读取视频: {str(e)}")

@@ -1,29 +1,25 @@
 """
-�B!W
-+@	�;��
+服务层模块
+业务逻辑编排
 """
-from .task_service import TaskService, task_service
-from .video_service import VideoService, video_service
-from .video_analyzer import VideoAnalyzer, video_analyzer
-from .video_content_analyzer import VideoContentAnalyzer, video_content_analyzer
+from .task_service import TaskService
+from .video_service import VideoService
+from .video_analyzer import VideoAnalyzer
+from .video_content_analyzer import VideoContentAnalyzer
 
-# ��y�s�
+# 新增服务
 from .video_compression import VideoCompressionService, video_compression_service
 from .temp_storage import TempStorageService, temp_storage_service
 from .video_editing import VideoEditingService, video_editing_service
 
 __all__ = [
-    # �	�
+    # 核心服务
     "TaskService",
-    "task_service",
     "VideoService",
-    "video_service",
     "VideoAnalyzer",
-    "video_analyzer",
     "VideoContentAnalyzer",
-    "video_content_analyzer",
 
-    # y�
+    # 新增服务
     "VideoCompressionService",
     "video_compression_service",
     "TempStorageService",

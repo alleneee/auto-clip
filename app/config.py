@@ -118,7 +118,10 @@ class Settings(BaseSettings):
     def parse_supported_formats(cls, v):
         """解析支持的格式列表"""
         if isinstance(v, str):
-            return [fmt.strip() for fmt in v.split(",")]
+            # 如果是空字符串,返回默认值
+            if not v.strip():
+                return ["mp4", "avi", "mov", "mkv", "flv", "wmv"]
+            return [fmt.strip() for fmt in v.split(",") if fmt.strip()]
         return v
 
     @field_validator("STORAGE_BACKEND")

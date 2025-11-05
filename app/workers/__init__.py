@@ -1,6 +1,6 @@
 """
-Celery Workers !W
-���y�\A
+Celery Workers 模块
+异步任务处理
 """
 from .celery_app import celery_app
 from .batch_processing_tasks import (
