@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
 
+    # ===== 任务存储配置 =====
+    USE_REDIS_FOR_TASKS: bool = Field(
+        default=True,
+        description="是否使用Redis存储任务，False则使用内存存储"
+    )
+
     # ===== 存储配置 =====
     STORAGE_BACKEND: str = Field(default="hybrid", description="存储模式: local, oss, hybrid")
     LOCAL_STORAGE_PATH: str = "./storage"

@@ -8,22 +8,31 @@ from app.models.task import Task, TaskStatus, TaskCreateRequest
 from app.core.exceptions import TaskNotFoundError
 from app.utils.logger import get_logger
 from app.utils.redis_client import redis_client
+from app.config import settings
 
 logger = get_logger(__name__)
 
 
 class TaskService:
-    """任务业务逻辑服务（使用Redis存储）"""
+    """任务业务逻辑服务（支持Redis或内存存储）"""
 
     def __init__(self):
         """
         初始化服务
 
-        使用Redis作为任务存储后端
+        根据配置选择Redis或内存存储
         """
-        self.redis = redis_client
+        self.use_redis = settings.USE_REDIS_FOR_TASKS
+        self.redis = redis_client if self.use_redis else None
+        # 内存存储（当USE_REDIS_FOR_TASKS=False时使用）
+        self.memory_storage: Dict[str, Task] = {}
         # 任务默认TTL（7天）
         self.task_ttl = 7 * 24 * 3600
+
+        logger.info(
+            "task_service_initialized",
+            storage_mode="redis" if self.use_redis else "memory"
+        )
 
     def generate_task_id(self) -> str:
         """
@@ -58,12 +67,15 @@ class TaskService:
             },
         )
 
-        # 存储任务到Redis
-        await self.redis.set_task(
-            task_id=task_id,
-            task_data=task.model_dump(),
-            ttl=self.task_ttl
-        )
+        # 存储任务（Redis或内存）
+        if self.use_redis:
+            await self.redis.set_task(
+                task_id=task_id,
+                task_data=task.model_dump(),
+                ttl=self.task_ttl
+            )
+        else:
+            self.memory_storage[task_id] = task
 
         logger.info(
             "task_created",
@@ -83,13 +95,16 @@ class TaskService:
                 config=request.config or {}
             )
 
-            # 记录Celery任务ID并更新到Redis
+            # 记录Celery任务ID并更新存储
             task.celery_task_id = celery_result.id
-            await self.redis.set_task(
-                task_id=task_id,
-                task_data=task.model_dump(),
-                ttl=self.task_ttl
-            )
+            if self.use_redis:
+                await self.redis.set_task(
+                    task_id=task_id,
+                    task_data=task.model_dump(),
+                    ttl=self.task_ttl
+                )
+            else:
+                self.memory_storage[task_id] = task
 
             logger.info(
                 "celery_task_submitted",
@@ -121,13 +136,16 @@ class TaskService:
         Raises:
             TaskNotFoundError: 任务不存在
         """
-        task_data = await self.redis.get_task(task_id)
-
-        if not task_data:
-            raise TaskNotFoundError(f"任务不存在: {task_id}")
-
-        # 从字典创建Task对象
-        task = Task(**task_data)
+        if self.use_redis:
+            task_data = await self.redis.get_task(task_id)
+            if not task_data:
+                raise TaskNotFoundError(f"任务不存在: {task_id}")
+            # 从字典创建Task对象
+            task = Task(**task_data)
+        else:
+            task = self.memory_storage.get(task_id)
+            if not task:
+                raise TaskNotFoundError(f"任务不存在: {task_id}")
 
         return task
 
@@ -241,13 +259,16 @@ class TaskService:
                     error=str(e)
                 )
 
-        # 更新任务状态并保存到Redis
+        # 更新任务状态并保存
         task.status = TaskStatus.CANCELLED
-        await self.redis.set_task(
-            task_id=task_id,
-            task_data=task.model_dump(),
-            ttl=self.task_ttl
-        )
+        if self.use_redis:
+            await self.redis.set_task(
+                task_id=task_id,
+                task_data=task.model_dump(),
+                ttl=self.task_ttl
+            )
+        else:
+            self.memory_storage[task_id] = task
 
         logger.info("task_cancelled", task_id=task_id, celery_revoked=celery_revoked)
 
@@ -275,15 +296,19 @@ class TaskService:
         Returns:
             任务列表和分页信息
         """
-        # 从Redis获取所有任务ID
-        task_ids = await self.redis.list_tasks()
-
-        # 获取所有任务数据
-        tasks = []
-        for task_id in task_ids:
-            task_data = await self.redis.get_task(task_id)
-            if task_data:
-                tasks.append(Task(**task_data))
+        # 获取所有任务
+        if self.use_redis:
+            # 从Redis获取所有任务ID
+            task_ids = await self.redis.list_tasks()
+            # 获取所有任务数据
+            tasks = []
+            for task_id in task_ids:
+                task_data = await self.redis.get_task(task_id)
+                if task_data:
+                    tasks.append(Task(**task_data))
+        else:
+            # 从内存获取所有任务
+            tasks = list(self.memory_storage.values())
 
         # 状态过滤
         if status:
@@ -351,12 +376,15 @@ class TaskService:
         if error_message:
             task.set_error(error_message)
 
-        # 保存更新到Redis
-        await self.redis.set_task(
-            task_id=task_id,
-            task_data=task.model_dump(),
-            ttl=self.task_ttl
-        )
+        # 保存更新
+        if self.use_redis:
+            await self.redis.set_task(
+                task_id=task_id,
+                task_data=task.model_dump(),
+                ttl=self.task_ttl
+            )
+        else:
+            self.memory_storage[task_id] = task
 
         logger.info(
             "task_status_updated",
