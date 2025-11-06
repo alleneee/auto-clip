@@ -72,3 +72,7 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
+
+# Scripts and test files (development only)
+scripts/
+tmp/
