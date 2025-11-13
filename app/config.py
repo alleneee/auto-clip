@@ -46,6 +46,35 @@ class Settings(BaseSettings):
     DASHSCOPE_API_KEY: str = Field(..., description="DashScope API密钥")
     DASHSCOPE_VL_MODEL: str = "qwen-vl-plus"
     DASHSCOPE_TEXT_MODEL: str = "qwen-plus"
+    DASHSCOPE_TTS_MODEL: str = Field(
+        default="cosyvoice-v1",
+        description="DashScope TTS模型（cosyvoice-v1/v2/v3/v3-plus等）"
+    )
+    EDGE_TTS_VOICE: str = Field(
+        default="zh-CN-XiaoxiaoNeural",
+        description="Edge TTS 默认音色"
+    )
+    EDGE_TTS_RATE: str = Field(default="+0%", description="Edge TTS 语速")
+    EDGE_TTS_PITCH: str = Field(default="+0Hz", description="Edge TTS 音高")
+    EDGE_TTS_VOLUME: str = Field(default="+0%", description="Edge TTS 音量")
+
+    # Gemini (视频理解)
+    GEMINI_API_KEY: Optional[str] = Field(None, description="Gemini API密钥")
+    GOOGLE_API_KEY: Optional[str] = Field(None, description="Google AI Studio API密钥（用于Google SDK）")
+    GEMINI_BASE_URL: Optional[str] = Field(
+        None,
+        description="Gemini API基础URL（支持自定义代理，留空使用官方地址）"
+    )
+    GEMINI_MODEL: str = Field(
+        default="gemini-2.0-flash-exp",
+        description="Gemini模型名称"
+    )
+
+    # 视觉分析服务选择
+    VISION_SERVICE: str = Field(
+        default="dashscope",
+        description="视觉分析服务: dashscope 或 gemini"
+    )
 
     # Paraformer
     PARAFORMER_APP_KEY: Optional[str] = None
@@ -130,6 +159,14 @@ class Settings(BaseSettings):
         """验证存储模式"""
         if v not in ["local", "oss", "hybrid"]:
             raise ValueError("STORAGE_BACKEND must be one of: local, oss, hybrid")
+        return v
+
+    @field_validator("VISION_SERVICE")
+    @classmethod
+    def validate_vision_service(cls, v):
+        """验证视觉分析服务"""
+        if v not in ["dashscope", "gemini"]:
+            raise ValueError("VISION_SERVICE must be one of: dashscope, gemini")
         return v
 
     @field_validator("DEFAULT_COMPRESSION_PROFILE")

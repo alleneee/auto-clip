@@ -11,9 +11,16 @@ flower==2.0.1
 # 视频处理 - MoviePy 2.x only
 moviepy>=2.0.0,<3.0.0
 ffmpeg-python>=0.2.0
+edge-tts==6.1.10
 
 # AI服务 - 阿里云DashScope
 dashscope==1.14.1
+
+# AI Agent框架
+agno>=2.0.0,<3.0.0
+
+# 多模型统一接口
+litellm>=1.50.0  
 
 # 存储
 oss2==2.18.4
@@ -24,7 +31,7 @@ pydantic-settings==2.1.0
 
 # HTTP客户端
 httpx==0.25.2
-aiohttp==3.9.1
+aiohttp>=3.10.0
 aiofiles==23.2.1
 
 # 异步工具
@@ -33,10 +40,11 @@ nest-asyncio==1.5.8
 # 日志和监控
 structlog==23.2.0
 prometheus-client==0.19.0
+rich>=13.0.0  # CLI美化输出
 
 # 工具库
 python-dotenv==1.0.0
-typing-extensions==4.9.0
+typing-extensions>=4.11.0
 
 # 开发工具
 pytest==7.4.3

@@ -1,0 +1,6 @@
+# Auto-Clip Project Overview
+- Purpose: AI-driven automated video clipping platform that ingests local/URL/OSS videos, analyzes content (vision + ASR) and outputs stitched highlight reels with quality scoring plus webhook/task tracking.
+- Stack: Python 3.10+, FastAPI API server, Celery workers with Redis queues, MoviePy 2.x + ffmpeg for editing, DashScope/Qwen VL + Paraformer ASR, OSS2 for Aliyun storage, structlog/rich for logging, Pydantic (v2) for settings/models, agno + LiteLLM for LLM orchestration.
+- Architecture: FastAPI app (`app/main.py`) exposing `/api/v1` endpoints; `app/services` hosts business logic (video editing, analysis); `app/models` for Pydantic schemas; `app/utils` for logging/json parsing; `app/workers` for Celery pipelines; `app/prompts` contains advanced prompt/agent system; storage handled under `storage/` with optional OSS sync; docs/ contains extensive design notes.
+- Key features: multi-source ingest, two-pass LLM analysis pipeline, quality scoring, batch processing, webhook notifications, hybrid storage, prompt registry for viral hooks/clip decisions.
+- Entry artifacts: Docker/Docker Compose for full stack (`docker-compose.yml`), scripts/examples for demos, `tests/` for pytest suites, `requirements.txt` for dependencies.

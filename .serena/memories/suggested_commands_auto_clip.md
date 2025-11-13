@@ -1,0 +1,11 @@
+# Suggested Commands
+- Install deps: `pip install -r requirements.txt`
+- Local FastAPI dev server: `python -m app.main` (or `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`)
+- Start Redis locally: `redis-server`
+- Run Celery worker: `celery -A app.workers.celery_app worker -l info`
+- Docker Compose full stack: `docker-compose up -d` / logs via `docker-compose logs -f` / stop with `docker-compose down`
+- Tests: `pytest tests/`
+- Formatting: `black .`
+- Example API smoke: `curl -X POST "http://localhost:8000/api/v1/videos/upload" -F "file=@video.mp4"`
+- Health check: `curl http://localhost:8000/health`
+- Flower monitoring: open `http://localhost:5555` after docker compose or `flower -A app.workers.celery_app --port=5555` if run manually

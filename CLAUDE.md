@@ -107,6 +107,88 @@ FastAPI API服务 → Redis任务队列 → Celery Workers
    - 任务隔离：分析队列和剪辑队列分离
    - 错误处理和重试机制
 
+### Complete Video Production Workflow (NEW - 完整视频生产流程)
+
+**最新实现的核心功能**：将多视频分析、剪辑和视频生产完全整合为一体化工作流。
+
+**工作流阶段**:
+1. **视频准备** (并行): 验证、下载、压缩
+2. **AI分析** (并行): DashScope VL模型分析每个视频
+3. **剪辑计划生成**: LLM基于分析结果生成剪辑决策
+4. **剪辑执行**: 提取片段、应用转场、拼接视频
+5. **完整生产** (NEW):
+   - 脚本生成：基于视频内容生成口播文案
+   - TTS合成：并行生成各段语音
+   - 音视频合成：混合TTS、背景音乐、视频
+   - 质量评分：5维度评估最终质量
+
+**触发条件**:
+```python
+# 在配置中设置任一选项即启用完整流程
+config = {
+    "add_narration": True,  # 添加口播旁白
+    # 或
+    "background_music_path": "/path/to/music.mp3"  # 添加背景音乐
+}
+```
+
+**关键任务**:
+- `produce_final_video_with_narration_task` (`batch_processing_tasks.py:757-899`):
+  - 接收剪辑后的视频和分析结果
+  - 调用 `VideoProductionOrchestrator.produce_video()`
+  - 生成完整的带口播视频
+
+**数据流转**:
+```
+analyze_video_task → analysis_results
+        ↓
+generate_clip_plan_task (保存analysis_results)
+        ↓
+execute_clip_plan_task (传递video_paths + analysis_results)
+        ↓
+produce_final_video_with_narration_task (生成脚本+TTS+合成)
+        ↓
+最终视频 + 脚本 + 质量评分
+```
+
+**使用场景**:
+- 📹 **自媒体创作**: 多素材一键成片
+- 📚 **教育视频**: 自动生成讲解视频
+- 📰 **新闻快讯**: 素材自动生成解说
+- 🎬 **Vlog制作**: 旅行素材自动故事化
+
+**API示例**:
+```bash
+# 完整视频生产请求
+POST /api/v1/batch/process
+{
+  "video_paths": ["video1.mp4", "video2.mp4"],
+  "config": {
+    "add_narration": true,
+    "narration_voice": "longxiaochun",
+    "background_music_path": "music.mp3",
+    "background_music_volume": 0.2,
+    "target_duration": 60
+  }
+}
+
+# 返回: 完整视频 + 脚本 + 质量评分
+```
+
+**质量评分系统** (5维度):
+- **narrative_coherence** (叙事连贯性): 脚本与视频内容匹配度
+- **audio_video_sync** (音画同步): TTS与视频时间轴对齐
+- **content_coverage** (内容覆盖): 视频内容完整性
+- **production_quality** (制作质量): 音频混合、转场效果质量
+- **engagement_potential** (吸引力): 整体吸引力评估
+
+**演示脚本**: `examples/complete_video_production_demo.py`
+- 5个实际使用场景演示
+- 基础 vs 完整流程对比
+- 完整的错误处理和进度显示
+
+**详细文档**: 参见 `docs/VIDEO_PROCESSING_PIPELINE.md` 的"流程 2.5"章节
+
 ### Prompt System (重要特性)
 
 **新型提示词管理系统** (`app/prompts/`):

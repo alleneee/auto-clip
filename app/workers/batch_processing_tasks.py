@@ -27,6 +27,7 @@ from app.services import (
     temp_storage_service,
     video_editing_service
 )
+from app.services.video_production_orchestrator import VideoProductionOrchestrator
 from app.utils.ai_clients.dashscope_client import DashScopeClient
 from app.utils.logger import logger
 from app.utils.json_parser import parse_json_with_model, JSONParseError
@@ -733,14 +734,19 @@ def execute_clip_plan_task(
         else:
             final_url = f"file://{final_path}"
 
-        return {
+        # 在返回结果中包含 analysis_results，供下游任务使用
+        result = {
             'final_video_path': final_path,
             'final_video_url': final_url,
             'duration': stats['total_duration'],
             'file_size': stats['output_size'],
             'processing_time': stats['processing_time'],
+            'video_paths': video_paths,  # 传递给下游任务
+            'analysis_results': clip_plan.get('analysis_results', []),  # 保存分析结果
             'error': None
         }
+
+        return result
 
     except Exception as e:
         logger.error(f"执行剪辑方案失败: {str(e)}", exc_info=True)
@@ -751,6 +757,199 @@ def execute_clip_plan_task(
             'file_size': 0,
             'error': str(e)
         }
+
+
+@celery_app.task(
+    bind=True,
+    name='batch_processing.produce_final_video_with_narration',
+    max_retries=2,
+    default_retry_delay=60
+)
+def produce_final_video_with_narration_task(
+    self,
+    clip_result: Dict[str, Any],
+    video_paths: List[str] = None,
+    config: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    完整视频生产任务：基于剪辑结果生成带旁白的最终视频
+
+    这是完整的视频生产流程，包括：
+    1. 使用剪辑结果作为基础视频
+    2. 基于视频内容生成解说脚本
+    3. 生成TTS口播音频
+    4. 合成视频与音频
+    5. 添加背景音乐（可选）
+
+    Args:
+        clip_result: execute_clip_plan_task 的返回结果（包含 analysis_results）
+        video_paths: 源视频路径列表（通过 Celery 的 s() 传递）
+        config: 配置（通过 Celery 的 s() 传递），包含:
+            - add_narration: bool, 是否添加配音
+            - narration_style: str, 解说风格
+            - narration_voice: str, TTS音色
+            - background_music_path: str, 背景音乐路径
+            - original_audio_volume: float, 原音量
+
+    Returns:
+        Dict: {
+            'final_video_path': str,
+            'final_video_url': str,
+            'duration': float,
+            'file_size': int,
+            'has_narration': bool,
+            'has_background_music': bool,
+            'processing_time': float,
+            'error': Optional[str]
+        }
+    """
+    try:
+        # 检查上游任务是否失败
+        if clip_result.get('error'):
+            raise ValueError(f"上游剪辑任务失败: {clip_result['error']}")
+
+        # 提取参数（从 clip_result 或使用默认值）
+        if video_paths is None:
+            video_paths = clip_result.get('video_paths', [])
+        if config is None:
+            config = {}
+
+        logger.info(
+            f"开始完整视频生产流程:\n"
+            f"  基础剪辑视频: {clip_result.get('final_video_path')}\n"
+            f"  是否添加配音: {config.get('add_narration', True)}\n"
+            f"  解说风格: {config.get('narration_style', 'professional')}"
+        )
+
+        # 如果不需要配音和背景音乐，直接返回基础剪辑结果
+        if not config.get('add_narration', True) and not config.get('background_music_path'):
+            logger.info("无需额外处理，直接使用基础剪辑结果")
+            return clip_result
+
+        # 初始化视频生产编排器
+        orchestrator = VideoProductionOrchestrator()
+
+        # 从 clip_result 中提取分析结果
+        analysis_results = clip_result.get('analysis_results', [])
+
+        # 构建剪辑决策（从分析结果和剪辑结果重建）
+        clip_decision = {
+            'theme': _extract_theme_from_analysis(analysis_results) if analysis_results else "精彩视频",
+            'total_duration': clip_result.get('duration', 0),
+            'clips': _reconstruct_clips_info(analysis_results) if analysis_results else []
+        }
+
+        # 生成最终输出路径
+        output_filename = f"final_with_narration_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        output_path = os.path.join(settings.processed_dir, output_filename)
+
+        # 调用完整的视频生产流程
+        production_result = run_async(
+            orchestrator.produce_video_from_decision(
+                source_videos=video_paths,
+                clip_decision=clip_decision,
+                output_path=output_path,
+                narration_style=config.get('narration_style', 'professional'),
+                narration_voice=config.get('narration_voice', 'Cherry'),
+                add_narration=config.get('add_narration', True),
+                background_music_path=config.get('background_music_path'),
+                original_audio_volume=config.get('original_audio_volume', 0.3)
+            )
+        )
+
+        # 上传最终视频到 OSS
+        final_path = production_result['final_video_path']
+        if temp_storage_service.is_oss_configured():
+            upload_result = run_async(
+                temp_storage_service.upload_temp_file(
+                    final_path,
+                    prefix="final_narration",
+                    expiry_hours=24 * 7  # 7天过期
+                )
+            )
+            final_url = upload_result['public_url']
+        else:
+            final_url = f"file://{final_path}"
+
+        # 收集统计信息
+        stats = production_result['statistics']
+
+        result = {
+            'final_video_path': final_path,
+            'final_video_url': final_url,
+            'duration': stats['final_duration'],
+            'file_size': stats['final_size'],
+            'has_narration': stats.get('has_narration', False),
+            'has_background_music': stats.get('has_background_music', False),
+            'script_word_count': stats.get('script_word_count', 0),
+            'processing_time': production_result['processing_time'],
+            'error': None
+        }
+
+        logger.info(
+            f"完整视频生产完成:\n"
+            f"  最终视频: {final_path}\n"
+            f"  文件大小: {stats['final_size_mb']:.2f}MB\n"
+            f"  视频时长: {stats['final_duration']:.2f}秒\n"
+            f"  配音状态: {'已添加' if stats['has_narration'] else '未添加'}\n"
+            f"  脚本字数: {stats.get('script_word_count', 0)}字"
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"完整视频生产失败: {str(e)}", exc_info=True)
+        return {
+            'final_video_path': None,
+            'final_video_url': None,
+            'duration': 0,
+            'file_size': 0,
+            'has_narration': False,
+            'has_background_music': False,
+            'processing_time': 0,
+            'error': str(e)
+        }
+
+
+def _extract_theme_from_analysis(analysis_results: List[Dict[str, Any]]) -> str:
+    """从分析结果中提取视频主题"""
+    themes = []
+    for result in analysis_results:
+        if result.get('analysis_summary'):
+            # 提取前100个字符作为主题
+            summary = result['analysis_summary'][:100]
+            themes.append(summary)
+
+    if themes:
+        return " | ".join(themes[:3])  # 最多3个视频的主题
+    return "精彩视频合集"
+
+
+def _reconstruct_clips_info(analysis_results: List[Dict[str, Any]]) -> List[Dict]:
+    """从分析结果重建片段信息（用于脚本生成）"""
+    clips = []
+    for idx, result in enumerate(analysis_results):
+        if result.get('key_moments'):
+            for moment in result['key_moments']:
+                clips.append({
+                    'video_index': idx,
+                    'timestamp': moment.get('timestamp', 0),
+                    'description': moment.get('description', ''),
+                    'confidence': moment.get('confidence', 0.5)
+                })
+
+    # 如果没有关键时刻，使用分析摘要
+    if not clips:
+        for idx, result in enumerate(analysis_results):
+            if result.get('analysis_summary'):
+                clips.append({
+                    'video_index': idx,
+                    'timestamp': 0,
+                    'description': result['analysis_summary'][:200],
+                    'confidence': 0.8
+                })
+
+    return clips
 
 
 # ======================
@@ -792,29 +991,70 @@ def batch_process_videos_task(
         # 阶段4: 聚合分析结果，生成剪辑方案
         # 阶段5: 执行剪辑方案
 
-        # 使用 chord 串联所有阶段
-        workflow = chord([
-            # 准备 → 压缩上传 → VL分析（链式调用）
-            prepare_video_task.s(video_source, idx)
-            | compress_and_upload_task.s(
-                config.get('global_compression_profile', 'balanced'),
-                config.get('temp_storage_expiry_hours', 24)
+        # 获取视频路径列表
+        video_paths = [vs.get('path') or vs.get('url') for vs in video_sources]
+
+        # 决定是否使用完整视频生产流程
+        use_full_production = config.get('add_narration', False) or config.get('background_music_path')
+
+        if use_full_production:
+            # 完整流程：包含脚本生成、TTS、音频合成
+            logger.info("使用完整视频生产流程（包含配音和音乐）")
+
+            # 使用 chord 串联所有阶段
+            workflow = chord([
+                # 准备 → 压缩上传 → VL分析（链式调用）
+                prepare_video_task.s(video_source, idx)
+                | compress_and_upload_task.s(
+                    config.get('global_compression_profile', 'balanced'),
+                    config.get('temp_storage_expiry_hours', 24)
+                )
+                | analyze_video_task.s(config.get('vl_model', 'qwen-vl-plus'))
+                for idx, video_source in enumerate(video_sources)
+            ])(
+                # 聚合任务：生成剪辑方案
+                generate_clip_plan_task.s(
+                    config.get('text_model', 'qwen-plus'),
+                    config.get('target_duration'),
+                    config.get('clip_strategy', 'highlights')
+                )
+                # 基础剪辑任务
+                | execute_clip_plan_task.s(
+                    video_paths,
+                    config.get('output_quality', 'high')
+                )
+                # 完整视频生产任务（新增）
+                | produce_final_video_with_narration_task.s(
+                    video_paths=video_paths,
+                    config=config
+                )
             )
-            | analyze_video_task.s(config.get('vl_model', 'qwen-vl-plus'))
-            for idx, video_source in enumerate(video_sources)
-        ])(
-            # 聚合任务：生成剪辑方案
-            generate_clip_plan_task.s(
-                config.get('text_model', 'qwen-plus'),
-                config.get('target_duration'),
-                config.get('clip_strategy', 'highlights')
+        else:
+            # 简化流程：仅剪辑拼接
+            logger.info("使用简化流程（仅剪辑拼接）")
+
+            workflow = chord([
+                # 准备 → 压缩上传 → VL分析（链式调用）
+                prepare_video_task.s(video_source, idx)
+                | compress_and_upload_task.s(
+                    config.get('global_compression_profile', 'balanced'),
+                    config.get('temp_storage_expiry_hours', 24)
+                )
+                | analyze_video_task.s(config.get('vl_model', 'qwen-vl-plus'))
+                for idx, video_source in enumerate(video_sources)
+            ])(
+                # 聚合任务：生成剪辑方案
+                generate_clip_plan_task.s(
+                    config.get('text_model', 'qwen-plus'),
+                    config.get('target_duration'),
+                    config.get('clip_strategy', 'highlights')
+                )
+                # 最终任务：执行剪辑方案
+                | execute_clip_plan_task.s(
+                    video_paths,
+                    config.get('output_quality', 'high')
+                )
             )
-            # 最终任务：执行剪辑方案
-            | execute_clip_plan_task.s(
-                [vs.get('path') or vs.get('url') for vs in video_sources],
-                config.get('output_quality', 'high')
-            )
-        )
 
         # 异步执行工作流
         result = workflow.apply_async()

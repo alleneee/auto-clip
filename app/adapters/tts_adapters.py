@@ -35,14 +35,19 @@ class DashScopeTTSAdapter:
         self,
         text: str,
         voice: Optional[str] = None,
-        output_format: str = "mp3"
+        output_format: str = "mp3",
+        sample_rate: Optional[int] = None,
+        rate: Optional[float] = None,
+        pitch: Optional[float] = None,
+        volume: Optional[int] = None,
+        **kwargs
     ) -> bytes:
         """
         将文本转换为语音（适配接口）
 
         Args:
             text: 要转换的文本
-            voice: 语音模型/音色 (默认使用longwan女声)
+            voice: 语音模型/音色 (默认使用Cherry女声)
             output_format: 输出格式 (mp3/wav等)
 
         Returns:
@@ -51,8 +56,13 @@ class DashScopeTTSAdapter:
         # 调用DashScopeClient的TTS方法
         return await self.client.synthesize_speech(
             text=text,
-            voice=voice or "Cherry",  # 使用Cherry作为默认音色 (qwen3-tts-flash)
-            output_format=output_format
+            voice=voice or "Cherry",
+            output_format=output_format,
+            sample_rate=sample_rate,
+            rate=rate,
+            pitch=pitch,
+            volume=volume,
+            **kwargs
         )
 
     async def synthesize_to_file(
@@ -60,7 +70,12 @@ class DashScopeTTSAdapter:
         text: str,
         output_path: str,
         voice: Optional[str] = None,
-        output_format: str = "mp3"
+        output_format: str = "mp3",
+        sample_rate: Optional[int] = None,
+        rate: Optional[float] = None,
+        pitch: Optional[float] = None,
+        volume: Optional[int] = None,
+        **kwargs
     ) -> str:
         """
         将文本转换为语音并保存到文件（适配接口）
@@ -78,7 +93,12 @@ class DashScopeTTSAdapter:
         audio_data = await self.synthesize_speech(
             text=text,
             voice=voice,
-            output_format=output_format
+            output_format=output_format,
+            sample_rate=sample_rate,
+            rate=rate,
+            pitch=pitch,
+            volume=volume,
+            **kwargs
         )
 
         # 异步写入文件
