@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Auto-Clip 是一个AI驱动的智能视频剪辑平台，支持多视频导入、自动内容分析和精彩片段提取。
 
-**技术栈**: FastAPI + Celery + Redis + MoviePy 2.x + 阿里云DashScope AI
+**技术栈**: FastAPI + Celery + Redis + MoviePy 2.x + 阿里云DashScope AI + Kokoro TTS
 
 ## Development Commands
 
@@ -40,6 +40,9 @@ pytest tests/ -v
 # 快速演示（不需要真实API）
 python test_prompt_system.py              # 提示词系统演示
 python test_complete_workflow_enhanced.py # 完整工作流演示
+
+# TTS测试
+python test_kokoro_tts.py                 # Kokoro TTS功能测试（需要安装kokoro）
 ```
 
 ### Code Quality
@@ -89,6 +92,10 @@ FastAPI API服务 → Redis任务队列 → Celery Workers
 - **DashScope**: 视觉分析（qwen-vl-plus）和文本生成（qwen-plus）
 - **Paraformer**: 语音识别（使用DashScope API）
 - **两阶段推理**: Pass 1生成主题 → Pass 2生成剪辑决策
+- **TTS服务**: 支持3种TTS提供商
+  - **DashScope TTS**: 阿里云CosyVoice，高质量中文语音
+  - **Edge TTS**: 微软Edge TTS，免费高质量，支持多语言
+  - **Kokoro TTS**: 开源本地TTS，82M参数轻量级模型，支持8种语言
 
 ### Key Services
 
@@ -255,6 +262,18 @@ REDIS_HOST=localhost
 REDIS_PORT=6379
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
+
+# TTS配置（可选）
+# Edge TTS配置
+EDGE_TTS_VOICE=zh-CN-XiaoxiaoNeural
+EDGE_TTS_RATE=+0%
+EDGE_TTS_PITCH=+0Hz
+EDGE_TTS_VOLUME=+0%
+
+# Kokoro TTS配置（本地开源TTS）
+KOKORO_VOICE=af_heart          # 默认音色
+KOKORO_LANG=z                  # 默认语言（z=中文）
+KOKORO_SPEED=1.0               # 语速（0.5-2.0）
 ```
 
 ### Storage Modes
@@ -429,3 +448,4 @@ url = storage_adapter.get_url("videos/output.mp4")
 - **提示词系统**: 使用统一的提示词管理系统，不要硬编码提示词
 - **质量评分**: 所有剪辑计划必须经过5维度质量评分
 - **任务持久化**: 生产环境必须设置 `USE_REDIS_FOR_TASKS=true`
+- **TTS集成**: 支持3种TTS提供商（DashScope/Edge/Kokoro），详见 `docs/KOKORO_TTS_INTEGRATION.md`

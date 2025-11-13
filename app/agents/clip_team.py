@@ -50,7 +50,7 @@ class AgnoClipTeam:
         script_model: str = "qwen-max",           # 新增：脚本生成模型
         analyzer_provider: str = "dashscope",  # 新增：analyzer的provider
         text_provider: str = "qwen",              # 新增：文本Agent的provider
-        tts_provider: str = "edge",          # 新增：TTS提供商（dashscope/edge）
+        tts_provider: str = "edge",          # 新增：TTS提供商（dashscope/edge/kokoro）
         max_iterations: int = 3,                  # 新增：最大迭代次数
         temp_dir: Optional[str] = None,           # 新增：视频剪辑临时目录
         enable_video_execution: bool = True,     # 新增：是否启用视频执行功能
@@ -68,6 +68,7 @@ class AgnoClipTeam:
             reviewer_model: 质量评审模型名（qwen: "qwen-max", deepseek: "deepseek-chat"）
             analyzer_provider: 视频分析Provider（"gemini-proxy" 或 "dashscope"）
             text_provider: 文本Agent Provider（"qwen" 或 "deepseek"）
+            tts_provider: TTS提供商（"dashscope" / "edge" / "kokoro"）
             max_iterations: 质量评审不通过时的最大重试次数（默认3次）
             temp_dir: 视频剪辑临时目录（默认使用settings.temp_dir）
             enable_video_execution: 是否启用视频执行功能（默认False，仅生成方案）
@@ -171,9 +172,11 @@ class AgnoClipTeam:
 
     # ========== Workflow Steps定义 ==========
 
-    def _step_1_analyze_videos(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _step_1_analyze_videos(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        步骤1：分析所有视频
+        步骤1：并发分析所有视频
+
+        使用asyncio.gather()并发执行视频分析，提高处理效率
 
         Args:
             context: Workflow上下文，包含video_paths
@@ -181,32 +184,59 @@ class AgnoClipTeam:
         Returns:
             更新后的上下文，添加analyses字段
         """
-        logger.info("【步骤1/4】开始视频内容分析")
+        import asyncio
+
+        logger.info("【步骤1/4】开始并发视频内容分析")
 
         video_paths = context.get("video_paths", [])
-        analyses = []
 
-        for i, video_path in enumerate(video_paths, 1):
+        # 验证视频文件
+        valid_paths = []
+        for video_path in video_paths:
             path = Path(video_path)
             if not path.exists():
                 logger.warning(f"视频文件不存在，跳过: {video_path}")
                 continue
+            valid_paths.append(path)
 
-            logger.info(f"分析视频 {i}/{len(video_paths)}: {path.name}")
+        if not valid_paths:
+            raise ValueError("没有有效的视频文件")
 
+        logger.info(f"准备并发分析 {len(valid_paths)} 个视频")
+
+        async def analyze_single_video(path: Path, index: int) -> Optional[MultimodalAnalysis]:
+            """并发分析单个视频的异步包装"""
             try:
-                analysis = self.content_analyzer.analyze(
-                    video_path=str(path),
-                    video_id=path.stem
+                logger.info(f"开始分析视频 {index}/{len(valid_paths)}: {path.name}")
+
+                # 使用asyncio.to_thread()将同步调用转为异步
+                # 不传递video_id，让content_analyzer自动生成UUID，避免重复
+                analysis = await asyncio.to_thread(
+                    self.content_analyzer.analyze,
+                    video_path=str(path)
                 )
-                analyses.append(analysis)
+
+                logger.info(f"✅ 视频分析完成 {index}/{len(valid_paths)}: {path.name}")
+                return analysis
 
             except Exception as e:
                 logger.error(
-                    f"视频分析失败: {path.name}",
-                    error=str(e)
+                    f"❌ 视频分析失败 {index}/{len(valid_paths)}: {path.name}",
+                    error=str(e),
+                    exc_info=True
                 )
-                continue
+                return None
+
+        # 并发执行所有视频分析
+        analysis_tasks = [
+            analyze_single_video(path, i + 1)
+            for i, path in enumerate(valid_paths)
+        ]
+
+        results = await asyncio.gather(*analysis_tasks, return_exceptions=False)
+
+        # 过滤掉失败的分析结果
+        analyses = [result for result in results if result is not None]
 
         if not analyses:
             raise ValueError("没有成功分析的视频")
@@ -215,8 +245,10 @@ class AgnoClipTeam:
         context["analyses"] = analyses
 
         logger.info(
-            "【步骤1/4】视频分析完成",
-            analyzed_count=len(analyses)
+            "【步骤1/4】并发视频分析完成",
+            total_videos=len(valid_paths),
+            analyzed_count=len(analyses),
+            failed_count=len(valid_paths) - len(analyses)
         )
 
         return context
@@ -650,8 +682,8 @@ class AgnoClipTeam:
                 "output_path": output_path
             }
 
-            # 执行Workflow（Step 1-6同步执行）
-            final_context = self._run_workflow_steps(initial_context)
+            # 执行Workflow（Step 1使用并发，Step 2-6按序执行）
+            final_context = await self._run_workflow_steps(initial_context)
 
             # Step 7: 异步执行TTS生成（如果启用了narration）
             if self.enable_narration and final_context.get("script"):
@@ -722,7 +754,7 @@ class AgnoClipTeam:
             )
             raise
 
-    def _run_workflow_steps(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _run_workflow_steps(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         执行Workflow的所有步骤（支持迭代改进）
 
@@ -738,9 +770,9 @@ class AgnoClipTeam:
         """
         current_context = context
 
-        # 步骤1: 视频分析（只执行一次）
-        logger.debug("执行步骤 1/4: 视频分析")
-        current_context = self._step_1_analyze_videos(current_context)
+        # 步骤1: 并发视频分析（只执行一次，异步）
+        logger.debug("执行步骤 1/4: 并发视频分析")
+        current_context = await self._step_1_analyze_videos(current_context)
 
         # 步骤2: 创意策略（只执行一次）
         logger.debug("执行步骤 2/4: 创意策略")

@@ -295,6 +295,9 @@ class TechnicalPlannerAgent:
             # 解析JSON
             plan_data = self._parse_json_response(content)
 
+            # 修正segment时间戳（过滤无效segment，重新计算duration）
+            plan_data = self._fix_segment_times(plan_data)
+
             # 自动修正total_duration为片段总和
             plan_data = self._fix_total_duration(plan_data)
 
@@ -317,6 +320,70 @@ class TechnicalPlannerAgent:
                 error_type=type(e).__name__
             )
             raise
+
+    def _fix_segment_times(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        修正和验证segment时间戳
+
+        1. 过滤掉end_time <= start_time的无效segment
+        2. 重新计算duration确保正确
+        3. 确保时间戳精度一致（保留1位小数）
+        """
+        if "segments" not in data or not isinstance(data["segments"], list):
+            return data
+
+        original_count = len(data["segments"])
+        valid_segments = []
+
+        for i, seg in enumerate(data["segments"]):
+            start_time = seg.get("start_time")
+            end_time = seg.get("end_time")
+
+            # 检查时间戳是否存在
+            if start_time is None or end_time is None:
+                logger.warning(
+                    f"片段{i}缺少时间戳，跳过",
+                    segment=seg
+                )
+                continue
+
+            # 确保时间戳精度（保留1位小数）
+            start_time = round(float(start_time), 1)
+            end_time = round(float(end_time), 1)
+
+            # 检查时间戳有效性
+            if end_time <= start_time:
+                logger.warning(
+                    f"片段{i}时间戳无效（end_time <= start_time），过滤",
+                    start_time=start_time,
+                    end_time=end_time,
+                    video_id=seg.get("video_id"),
+                    role=seg.get("role")
+                )
+                continue
+
+            # 重新计算duration
+            duration = round(end_time - start_time, 1)
+
+            # 更新segment数据
+            seg["start_time"] = start_time
+            seg["end_time"] = end_time
+            seg["duration"] = duration
+
+            valid_segments.append(seg)
+
+        # 更新segments列表
+        data["segments"] = valid_segments
+
+        if len(valid_segments) < original_count:
+            logger.warning(
+                "过滤了无效的segment",
+                original_count=original_count,
+                valid_count=len(valid_segments),
+                filtered_count=original_count - len(valid_segments)
+            )
+
+        return data
 
     def _fix_total_duration(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """

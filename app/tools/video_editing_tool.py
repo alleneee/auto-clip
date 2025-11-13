@@ -425,16 +425,25 @@ class VideoEditingTools(Toolkit):
                 start_time = segment.get("start_time")
                 end_time = segment.get("end_time")
 
-                # 查找源视频
-                if video_id not in video_map:
+                # 查找源视频（支持带UUID后缀的video_id）
+                source_video = None
+
+                # 1. 精确匹配
+                if video_id in video_map:
+                    source_video = video_map[video_id]
+                else:
+                    # 2. 尝试移除UUID后缀（格式：filename-uuid）
+                    base_id = video_id.split('-')[0] if '-' in video_id else video_id
+                    if base_id in video_map:
+                        source_video = video_map[base_id]
+
+                if not source_video:
                     result = {
                         "success": False,
-                        "error": f"找不到视频ID: {video_id}"
+                        "error": f"找不到视频ID: {video_id} (尝试了 {video_id} 和 {base_id if '-' in video_id else 'N/A'})"
                     }
                     log_debug(f"execute_clip_plan失败: {result['error']}")
                     return json.dumps(result)
-
-                source_video = video_map[video_id]
 
                 # 提取片段（调用自己的方法）
                 clip_result_json = self.extract_clip(

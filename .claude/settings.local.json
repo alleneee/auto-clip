@@ -1,9 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ffprobe:*)"
+      "Bash(ffprobe:*)",
+      "WebFetch(domain:pypi.tuna.tsinghua.edu.cn)"
     ],
     "deny": [],
     "ask": []
+  },
+  "sandbox": {
+    "autoAllowBashIfSandboxed": false,
+    "enabled": false
   }
 }

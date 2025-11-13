@@ -58,6 +58,28 @@ class Settings(BaseSettings):
     EDGE_TTS_PITCH: str = Field(default="+0Hz", description="Edge TTS 音高")
     EDGE_TTS_VOLUME: str = Field(default="+0%", description="Edge TTS 音量")
 
+    # TTS提供商选择
+    TTS_PROVIDER: str = Field(
+        default="kokoro",
+        description="TTS提供商: dashscope, edge, kokoro"
+    )
+
+    # Kokoro TTS (本地开源TTS)
+    KOKORO_VOICE: str = Field(
+        default="af_heart",
+        description="Kokoro TTS 默认音色（af_heart, af_sky, am_adam等）"
+    )
+    KOKORO_LANG: str = Field(
+        default="z",
+        description="Kokoro TTS 默认语言代码（a=英语, z=中文, j=日语等）"
+    )
+    KOKORO_SPEED: float = Field(
+        default=1.0,
+        description="Kokoro TTS 默认语速（0.5-2.0）",
+        ge=0.5,
+        le=2.0
+    )
+
     # Gemini (视频理解)
     GEMINI_API_KEY: Optional[str] = Field(None, description="Gemini API密钥")
     GOOGLE_API_KEY: Optional[str] = Field(None, description="Google AI Studio API密钥（用于Google SDK）")
@@ -167,6 +189,14 @@ class Settings(BaseSettings):
         """验证视觉分析服务"""
         if v not in ["dashscope", "gemini"]:
             raise ValueError("VISION_SERVICE must be one of: dashscope, gemini")
+        return v
+
+    @field_validator("TTS_PROVIDER")
+    @classmethod
+    def validate_tts_provider(cls, v):
+        """验证TTS提供商"""
+        if v not in ["dashscope", "edge", "kokoro"]:
+            raise ValueError("TTS_PROVIDER must be one of: dashscope, edge, kokoro")
         return v
 
     @field_validator("DEFAULT_COMPRESSION_PROFILE")

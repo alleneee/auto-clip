@@ -299,16 +299,40 @@ class ContentAnalyzerAgent:
         # 构建提示词
         prompt = self._build_analysis_prompt(str(path), video_id)
 
+        # 为Gemini创建临时文件副本以避免409缓存冲突
+        temp_video_path = None
+        if self.provider == "gemini":
+            import shutil
+            import tempfile
+            from uuid import uuid4
+
+            # 创建临时文件，使用UUID命名避免Gemini缓存冲突
+            temp_dir = Path(tempfile.gettempdir()) / "auto-clip-gemini"
+            temp_dir.mkdir(exist_ok=True)
+
+            temp_filename = f"{uuid4().hex}{path.suffix}"
+            temp_video_path = temp_dir / temp_filename
+
+            shutil.copy2(path, temp_video_path)
+            logger.info(
+                "为Gemini创建临时视频副本",
+                original=str(path),
+                temp=str(temp_video_path)
+            )
+            video_file_path = temp_video_path
+        else:
+            video_file_path = path
+
         try:
             # 统一使用本地文件路径创建 Video 对象
             logger.info(
                 f"使用 {self.provider} 分析视频...",
-                video_path=str(path),
+                video_path=str(video_file_path),
                 model=self.model_name
             )
 
             # ✅ 创建 Video 对象（适用于 DashScope 和 OpenAI-like API）
-            video = Video(filepath=str(path.absolute()))
+            video = Video(filepath=str(video_file_path.absolute()))
 
             # 调用Agent分析
             response = self.agent.run(
@@ -346,6 +370,18 @@ class ContentAnalyzerAgent:
                 error_type=type(e).__name__
             )
             raise
+        finally:
+            # 清理Gemini临时文件
+            if temp_video_path and temp_video_path.exists():
+                try:
+                    temp_video_path.unlink()
+                    logger.debug("已删除Gemini临时视频文件", path=str(temp_video_path))
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "清理临时文件失败",
+                        path=str(temp_video_path),
+                        error=str(cleanup_error)
+                    )
 
     def _fix_emotion_values(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """

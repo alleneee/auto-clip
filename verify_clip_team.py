@@ -109,10 +109,9 @@ async def main():
         "target_duration": 30,  # 30秒短视频
         "platform": "douyin",
         "add_narration": True,  # 添加口播旁白
-        "narration_tts_provider": "edge",
-        "narration_voice": "zh-CN-XiaoxiaoNeural",  # Edge 中文音色
-        "narration_rate": "+5%",
-        "narration_pitch": "+0Hz",
+        "narration_tts_provider": "kokoro",  # 使用Kokoro TTS（本地开源）
+        "narration_voice": "af_heart",  # Kokoro 音色
+        "narration_speed": 1.0,  # Kokoro 语速
         "generate_srt": True,  # 生成SRT字幕文件
         "burn_subtitles": True,  # 烧录字幕到视频
         "subtitle_config": {
@@ -123,7 +122,7 @@ async def main():
         }
     }
     
-    console.print(f"\n🚀 开始执行完整流程（目标时长: 30秒，包含口播和字幕）...\n", style="bold cyan")
+    console.print(f"\n🚀 开始执行完整流程（目标时长: 30秒，使用Kokoro TTS + 字幕）...\n", style="bold cyan")
 
     try:
         # 运行完整流程

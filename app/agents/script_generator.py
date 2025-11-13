@@ -22,6 +22,7 @@ from app.models.agno_models import (
 )
 from app.adapters.tts_adapters import DashScopeTTSAdapter
 from app.adapters.edge_tts_adapter import EdgeTTSAdapter
+from app.adapters.kokoro_tts_adapter import KokoroTTSAdapter
 from app.config import settings
 import structlog
 
@@ -44,7 +45,7 @@ class ScriptGeneratorAgent:
         api_key: str = None,
         temperature: float = 0.7,
         provider: Literal["qwen"] = "qwen",
-        tts_provider: Literal["dashscope", "edge"] = "dashscope"
+        tts_provider: Optional[Literal["dashscope", "edge", "kokoro"]] = None
     ):
         """
         初始化脚本生成师Agent
@@ -83,7 +84,8 @@ class ScriptGeneratorAgent:
         )
 
         # 初始化TTS适配器（支持多Provider）
-        self.default_tts_provider = tts_provider
+        # 如果未指定provider，则使用配置文件中的默认值
+        self.default_tts_provider = tts_provider or settings.TTS_PROVIDER
         self.tts_adapters: Dict[str, Any] = {
             "dashscope": DashScopeTTSAdapter(api_key=api_key or settings.DASHSCOPE_API_KEY)
         }
@@ -92,11 +94,17 @@ class ScriptGeneratorAgent:
         except Exception as exc:
             logger.warning("Edge TTS初始化失败", error=str(exc))
 
+        try:
+            self.tts_adapters["kokoro"] = KokoroTTSAdapter()
+        except Exception as exc:
+            logger.warning("Kokoro TTS初始化失败", error=str(exc), hint="pip install kokoro>=0.9.4 soundfile")
+
         logger.info(
             "ScriptGeneratorAgent初始化",
             model=model,
             temperature=temperature,
-            provider=provider
+            provider=provider,
+            tts_provider=self.default_tts_provider
         )
 
     def _build_script_prompt(
@@ -451,12 +459,12 @@ class ScriptGeneratorAgent:
                 style_degree=style_degree
             )
 
-            # 获取音频时长（使用moviepy）
+            # 获取音频时长（使用moviepy 2.x）
             try:
-                from moviepy.editor import AudioFileClip
+                from moviepy import AudioFileClip
             except ImportError as exc:
                 raise RuntimeError(
-                    "缺少moviepy依赖，请先运行 pip install moviepy"
+                    "MoviePy导入失败，请确保已安装 moviepy>=2.0: pip install moviepy"
                 ) from exc
 
             audio_clip = AudioFileClip(output_path)
